@@ -6,7 +6,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
 from pydantic_ai import Agent
-from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.models.openai import OpenAIModel
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,8 @@ class DigestResult(BaseModel):
 
 # ── Model factory ─────────────────────────────────────────────────────────────
 
-def _make_model(api_key: str, model_id: str) -> OpenRouterModel:
-    return OpenRouterModel(model_id, api_key=api_key)
+def _make_model(api_key: str, model_id: str) -> OpenAIModel:
+    return OpenAIModel(model_id, base_url=OPENROUTER_BASE, api_key=api_key)
 
 
 def _get_client(api_key: str) -> AsyncOpenAI:
