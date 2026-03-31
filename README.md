@@ -94,7 +94,7 @@ docker compose up -d --build
 
 ## Автодеплой через GitHub Actions
 
-При каждом `git push` в ветку `main` Actions SSH-ит на сервер и перезапускает Docker.
+При каждом `git push` в ветку `master` Actions SSH-ит на сервер и перезапускает Docker.
 
 ### Настройка (один раз)
 
@@ -119,7 +119,7 @@ cp .env.example .env  # заполни ключи
 docker compose up -d --build
 ```
 
-После этого каждый `git push main` → деплой автоматически (~30 сек).
+После этого каждый `git push master` → деплой автоматически (~30 сек).
 
 ---
 
