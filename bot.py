@@ -33,8 +33,10 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID"))
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
-DATA_FILE = Path(__file__).parent / "data.json"
-HISTORY_FILE = Path(__file__).parent / "digests_history.json"
+_DATA_DIR = Path(__file__).parent / "data"
+_DATA_DIR.mkdir(exist_ok=True)
+DATA_FILE = _DATA_DIR / "data.json"
+HISTORY_FILE = _DATA_DIR / "digests_history.json"
 MOSCOW = pytz.timezone("Europe/Moscow")
 
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
