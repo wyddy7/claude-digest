@@ -9,5 +9,5 @@ dependencies = [
     "openai>=1.54.5",
     "python-dotenv",
     "pytz",
-    "pydantic-ai>=0.2.4",
+    "pydantic-ai>=0.0.51",
 ]
