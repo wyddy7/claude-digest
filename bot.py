@@ -65,13 +65,14 @@ def load() -> dict:
         data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
         data.setdefault("channels", DEFAULT_CHANNELS[:])
         data.setdefault("focus_auto_reset", False)
+        # Remove any leaked key from the data file
+        data.pop("openrouter_key", None)
         return data
     return {
         "description": DEFAULT_PROFILE,
         "current_focus": "",
         "focus_auto_reset": False,
         "model": "anthropic/claude-3.5-haiku",
-        "openrouter_key": OPENROUTER_KEY,
         "channels": DEFAULT_CHANNELS[:],
         "last_digest": "",
         "last_digest_time": "",
@@ -169,7 +170,12 @@ async def do_send_digest(bot, chat_id: int):
     data = load()
     posts = await scrape_all(data["channels"])
     recent = load_history()[-3:]
-    digest = await generate_digest(posts, data, recent_digests=recent)
+
+    # Explicitly pass the key from environment, not from data dict
+    user_data_for_ai = data.copy()
+    user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
+
+    digest = await generate_digest(posts, user_data_for_ai, recent_digests=recent)
 
     # Auto-reset focus after digest if enabled
     if data.get("focus_auto_reset") and data.get("current_focus"):
@@ -193,7 +199,7 @@ async def do_send_digest(bot, chat_id: int):
     raw_images = [p["image_bytes"] for p in posts if p.get("image_bytes")]
     logger.info(f"Raw images found: {len(raw_images)}")
     if raw_images:
-        approved = await filter_images(raw_images, digest, data["openrouter_key"])
+        approved = await filter_images(raw_images, digest, OPENROUTER_KEY)
         logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
         if approved:
             media = [InputMediaPhoto(BytesIO(b)) for b in approved[:10]]
@@ -459,7 +465,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_history(data, f"Msg: {text[:80]}")
     save(data)
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
-    reply = await chat_response(text, data)
+
+    # Explicitly pass the key from environment
+    user_data_for_ai = data.copy()
+    user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
+
+    reply = await chat_response(text, user_data_for_ai)
     data2 = load()
     add_history(data2, f"Bot: {reply[:80]}")
     save(data2)
