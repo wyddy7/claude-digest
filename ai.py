@@ -13,8 +13,6 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 
-# ... (CLAUDE_CODE_CONTEXT остается без изменений) ...
-
 # ── Structured output schema ──────────────────────────────────────────────────
 
 class Insight(BaseModel):
@@ -70,7 +68,7 @@ def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = Non
 
 ТЕКУЩИЙ ФОКУС: {focus if focus else "не задан"}
 
-{CLAUDE_CODE_CONTEXT}{prev}
+{prev}
 ИСТОРИЯ ВЗАИМОДЕЙСТВИЙ:
 {history_text}
 
