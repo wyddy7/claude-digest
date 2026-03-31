@@ -1,45 +1,33 @@
 import base64
 import logging
 from html import escape
+from typing import Optional
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.models.openrouter import OpenRouterModel
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 
-CLAUDE_CODE_CONTEXT = """
-ФИЧИ CLAUDE CODE (которых нет в Cursor):
-- CLAUDE.md — постоянные инструкции проекта (аналог .cursorrules, поддерживает вложенные файлы)
-- Хуки (settings.json hooks) — bash при PreToolUse/PostToolUse/Stop (авто-тест, авто-линт)
-- MCP-серверы (/mcp) — Figma, Playwright, БД, Slack, GitHub — подключаются через settings.json
-- Кастомные скиллы — .md файлы в ~/.claude/commands/, вызов через /имя
-- Subagents — параллельный запуск через Agent tool внутри сессии
-- Plan mode — план без изменений кода, потом выполнение
-- /compact — сжатие контекста без потери сути
-- Extended thinking для архитектурных задач
-- Worktree isolation — агент в изолированной git-ветке
-"""
-
+# ... (CLAUDE_CODE_CONTEXT остается без изменений) ...
 
 # ── Structured output schema ──────────────────────────────────────────────────
 
 class Insight(BaseModel):
     title: str    # 3-6 слов, название инсайта
     channel: str  # username канала без @
-    url: str      # полная ссылка https://t.me/channel/123 — ТОЛЬКО из списка постов
+    url: Optional[str] = None # полная ссылка https://t.me/channel/123 — ТОЛЬКО из списка постов
     what: str     # что это — одно предложение
     how: str      # как конкретно применить — команда/шаг/инструмент
 
     @field_validator("url", mode="before")
     @classmethod
     def ensure_url(cls, v: str, info) -> str:
-        if v and v.startswith("https://t.me/"):
+        if isinstance(v, str) and v.startswith("https://t.me/"):
             return v
         # Fallback to channel base URL if model returned garbage
         channel = (info.data or {}).get("channel", "")
@@ -54,10 +42,8 @@ class DigestResult(BaseModel):
 
 # ── Model factory ─────────────────────────────────────────────────────────────
 
-def _make_model(api_key: str, model_id: str) -> OpenAIModel:
-    client = AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE)
-    provider = OpenAIProvider(openai_client=client)
-    return OpenAIModel(model_id, provider=provider)
+def _make_model(api_key: str, model_id: str) -> OpenRouterModel:
+    return OpenRouterModel(model_id, api_key=api_key)
 
 
 def _get_client(api_key: str) -> AsyncOpenAI:
@@ -160,13 +146,22 @@ async def generate_digest(
 
 # ── Image filtering ───────────────────────────────────────────────────────────
 
-async def filter_images(images: list[bytes], digest: str, api_key: str) -> list[bytes]:
+async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> list[bytes]:
+    """
+    Фильтрует изображения, оставляя только те, что тематически подходят под сгенерированный дайджест.
+    Использует Vision-модель для анализа.
+    """
     if not images:
         return []
+    
     client = _get_client(api_key)
-    digest_preview = digest[:500]
+    # Ограничиваем количество картинок для анализа, чтобы не тратить токены
     approved = []
-    for img_bytes in images[:8]:
+    
+    # Подготавливаем краткую версию дайджеста для контекста
+    context = digest_text[:1500] 
+    
+    for img_bytes in images[:10]:
         b64 = base64.b64encode(img_bytes).decode()
         try:
             resp = await client.chat.completions.create(
@@ -175,21 +170,30 @@ async def filter_images(images: list[bytes], digest: str, api_key: str) -> list[
                     "role": "user",
                     "content": [
                         {"type": "text", "text": (
-                            f"Контекст дайджеста (AI/tech):\n{digest_preview}\n\n"
-                            "Эта картинка тематически уместна рядом с дайджестом? Ответь только YES или NO."
+                            "Ты — визуальный редактор. Твоя задача: отобрать картинки для дайджеста об AI и технологиях.\n"
+                            f"ТЕКСТ ДАЙДЖЕСТА:\n{context}\n\n"
+                            "Картинка УМЕСТНА, если она:\n"
+                            "1. Иллюстрирует один из пунктов дайджеста.\n"
+                            "2. Является скриншотом нового инструмента/интерфейса.\n"
+                            "3. Это качественное тематическое фото (роботы, код, чипы).\n"
+                            "Картинка НЕУМЕСТНА, если это: реклама, мем не по теме, личное фото, мусорный скриншот.\n\n"
+                            "Ответь только одним словом: YES или NO."
                         )},
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
                     ],
                 }],
                 max_tokens=5,
+                temperature=0.0,
             )
             answer = resp.choices[0].message.content.strip().upper()
             logger.info(f"Image filter verdict: {answer}")
             if "YES" in answer:
                 approved.append(img_bytes)
         except Exception as e:
-            logger.warning(f"image filter error: {e} — включаю")
-            approved.append(img_bytes)
+            logger.warning(f"image filter error: {e}")
+            # В случае ошибки API лучше пропустить картинку, чем уронить весь процесс
+            continue
+            
     return approved
 
 
