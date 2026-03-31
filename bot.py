@@ -108,11 +108,14 @@ def load_history() -> list:
 
 def append_to_history(digest: str, posts_count: int):
     history = load_history()
+    is_error = digest.startswith("Ошибка") or digest.startswith("Не нашёл")
     history.append({
+        "id": len(history) + 1,
         "date": datetime.now(MOSCOW).strftime("%Y-%m-%d"),
         "datetime": datetime.now(MOSCOW).isoformat(),
         "digest": digest,
         "posts_count": posts_count,
+        "is_error": is_error,
     })
     HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -139,10 +142,13 @@ def history_kb(history: list, page: int = 0, per_page: int = 5) -> InlineKeyboar
     rows = []
     for i in range(start, end):
         d = history[i]
-        rows.append([InlineKeyboardButton(
-            f"📰 {d['date']}  ({d['posts_count']} постов)",
-            callback_data=f"hv|{i}",
-        )])
+        did = d.get("id", i + 1)
+        date_short = d["date"][5:].replace("-", ".")  # MM.DD
+        if d.get("is_error"):
+            label = f"❌ {date_short} #{did}"
+        else:
+            label = f"📰 {date_short} #{did}  ({d['posts_count']} постов)"
+        rows.append([InlineKeyboardButton(label, callback_data=f"hv|{i}")])
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("⬅️", callback_data=f"hp|{page - 1}"))
@@ -346,7 +352,8 @@ async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("Запись не найдена.")
         return
     d = history[idx]
-    text = f"📰 <b>Дайджест {d['date']}</b>\n\n{d['digest']}"
+    did = d.get("id", idx + 1)
+    text = f"📰 <b>Дайджест {d['date']} #{did}</b>\n\n{d['digest']}"
     if len(text) > 4000:
         text = text[:4000] + "…"
     back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Список", callback_data="hp|0")]])
