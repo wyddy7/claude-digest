@@ -5,5 +5,4 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data.json:/app/data.json
-      - ./digests_history.json:/app/digests_history.json
+      - ./data:/app/data
