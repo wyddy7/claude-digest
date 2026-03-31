@@ -18,11 +18,12 @@ CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 
 class Insight(BaseModel):
     """Один инсайт из дайджеста."""
-    title: str    # 3-6 слов, название инсайта
-    channel: str  # username канала без @
-    url: Optional[str] = None  # полная ссылка https://t.me/channel/123 — ТОЛЬКО из списка постов
-    what: str     # что это — одно предложение
-    how: str      # как конкретно применить — команда/шаг/инструмент
+    title: str       # 3-6 слов, название инсайта
+    channel: str     # username канала без @
+    url: Optional[str] = None   # полная ссылка https://t.me/channel/123 — ТОЛЬКО из списка постов
+    post_date: str = ""          # дата поста в формате DD.MM.YYYY — из поля ДАТА
+    what: str        # что это — одно предложение, факт
+    how: str         # конкретная команда/файл/шаг/инструмент — НЕ "изучи X"
 
     @field_validator("url", mode="before")
     @classmethod
@@ -36,8 +37,8 @@ class Insight(BaseModel):
 class DigestResult(BaseModel):
     """Структурированный дайджест Telegram-каналов."""
     insights: list[Insight]  # 3-6 инсайтов
-    personal: list[str]      # 2-3 пункта лично для Дании
-    today: str               # одно конкретное действие сегодня
+    personal: list[str]      # 2-3 пункта лично для Дании — конкретные, не общие
+    today: str               # ОДНО конкретное действие: глагол + инструмент/команда/файл
 
 
 # ── Model factory ─────────────────────────────────────────────────────────────
@@ -64,20 +65,27 @@ def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = Non
     prev = ""
     if recent_digests:
         items = [f"- {d['date']}: {d['digest'][:120]}…" for d in recent_digests[-3:]]
-        prev = "\nПРЕДЫДУЩИЕ ДАЙДЖЕСТЫ (не повторяй те же инсайты):\n" + "\n".join(items)
+        prev = "\nПРЕДЫДУЩИЕ ДАЙДЖЕСТЫ (не повторяй те же инсайты):\n" + "\n".join(items) + "\n"
 
-    return f"""Ты персональный ИИ-ассистент Дании. По-русски, без воды, конкретно.
+    return f"""Ты — редактор персонального дайджеста AI/tech новостей. Пишешь по-русски, сухо, конкретно.
 
 ПРОФИЛЬ:
 {desc}
 
 ТЕКУЩИЙ ФОКУС: {focus if focus else "не задан"}
-
 {prev}
-ИСТОРИЯ ВЗАИМОДЕЙСТВИЙ:
+ПОСЛЕДНИЕ ВЗАИМОДЕЙСТВИЯ:
 {history_text}
 
-Правило: только конкретные команды/файлы/шаги. Никаких "можно изучить X" или "открывает горизонты"."""
+ЖЁСТКИЕ ПРАВИЛА:
+1. `what` = один факт из поста (что именно появилось/изменилось/вышло).
+2. `how` = конкретная команда, путь к файлу, URL, флаг CLI или название инструмента. Никогда не пиши "изучи X", "используй X для Y" без конкретного шага.
+3. `today` = одно предложение: глагол в повелительном + конкретный инструмент/команда/файл. Пример: "Запусти `uv run test_smoke.py` и проверь логи scraper-а".
+4. `personal` = 2-3 пункта, каждый привязан к конкретному инсайту из этого дайджеста, не к общим советам.
+5. `post_date` = дата из поля ДАТА в исходных данных, формат DD.MM.YYYY.
+6. `url` = ТОЛЬКО ссылки из поля ССЫЛКА. Не придумывай.
+
+СТОП-СЛОВА (за их использование — неправильный ответ): "открывает горизонты", "даст преимущество", "критически важен", "удваивай ставку", "не распыляйся", "инвестируй время"."""
 
 
 # ── Digest generation via PydanticAI ─────────────────────────────────────────
@@ -86,7 +94,22 @@ def _format_posts(posts: list[dict]) -> str:
     parts = []
     for p in posts:
         link = p.get("link") or f"https://t.me/{p['channel']}"
-        parts.append(f"КАНАЛ: {p['channel']}\nССЫЛКА: {link}\nТЕКСТ: {p['text'][:800]}")
+        # Parse time to human-readable date for AI
+        post_time_raw = p.get("time", "")
+        date_str = ""
+        if post_time_raw:
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(post_time_raw)
+                date_str = dt.strftime("%d.%m.%Y %H:%M UTC")
+            except Exception:
+                date_str = post_time_raw[:10]
+        parts.append(
+            f"КАНАЛ: {p['channel']}\n"
+            f"ДАТА: {date_str}\n"
+            f"ССЫЛКА: {link}\n"
+            f"ТЕКСТ: {p['text'][:800]}"
+        )
     return "\n\n---\n\n".join(parts)
 
 
@@ -94,8 +117,9 @@ def _to_html(d: DigestResult) -> str:
     lines = ["<b>Топ инсайтов:</b>\n"]
     for ins in d.insights:
         url = ins.url or f"https://t.me/{ins.channel}"
+        date_label = f" <i>{escape(ins.post_date)}</i>" if ins.post_date else ""
         lines.append(
-            f'• <b>{escape(ins.title)}</b> <a href="{url}">{escape(ins.channel)}</a>\n'
+            f'• <b>{escape(ins.title)}</b> <a href="{url}">{escape(ins.channel)}</a>{date_label}\n'
             f"  {escape(ins.what)}\n"
             f"  <i>{escape(ins.how)}</i>\n"
         )
@@ -122,10 +146,14 @@ async def generate_digest(
 
     posts_text = _format_posts(posts)
     prompt = (
-        f"Посты из Telegram-каналов за последние 24 часа:{focus_line}\n\n"
+        f"Посты из Telegram-каналов:{focus_line}\n\n"
         f"{posts_text}\n\n---\n"
-        "Выбери 3-6 самых важных инсайтов для Дании. "
-        "Для каждого используй ТОЧНУЮ ссылку из поля ССЫЛКА выше — не придумывай URL."
+        "Выбери 3-6 самых важных инсайтов. "
+        "Для каждого:\n"
+        "- url: ТОЧНАЯ ссылка из поля ССЫЛКА (не придумывай)\n"
+        "- post_date: дата из поля ДАТА (формат DD.MM.YYYY)\n"
+        "- how: конкретная команда/файл/инструмент, не общий совет\n"
+        "- today: одно действие с конкретным инструментом или командой"
     )
 
     system = build_system_prompt(user_data, recent_digests)

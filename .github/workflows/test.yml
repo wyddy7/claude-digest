@@ -1,0 +1,61 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: digest_bot
+
+      - name: Import check
+        run: uv run python -c "import bot; import ai; import scraper; print('imports OK')"
+        working-directory: digest_bot
+
+      - name: Scraper test (public, no credentials)
+        run: |
+          uv run python -c "
+          import asyncio
+          from scraper import scrape_channel
+
+          async def main():
+              posts = await scrape_channel('cryptoEssay', hours_back=48)
+              assert isinstance(posts, list), 'Expected list'
+              for p in posts:
+                  assert p.get('time'), f'Post missing timestamp: {p[\"text\"][:50]}'
+              print(f'OK: {len(posts)} posts, all with timestamps')
+
+          asyncio.run(main())
+          "
+        working-directory: digest_bot
+
+      - name: Full smoke test (requires secrets)
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+        run: |
+          if [ -z "$OPENROUTER_KEY" ]; then
+            echo "Skipping full smoke test: OPENROUTER_KEY not set in GitHub Secrets"
+            exit 0
+          fi
+          uv run test_smoke.py
+        working-directory: digest_bot

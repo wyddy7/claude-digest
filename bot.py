@@ -14,6 +14,7 @@ from telegram import (
     ReplyKeyboardMarkup,
     Update,
 )
+from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -42,10 +43,10 @@ MOSCOW = pytz.timezone("Europe/Moscow")
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 
 MODELS = {
-    "⚡ Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
-    "🧠 Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
-    "🚀 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
+    "🚀 Claude Sonnet 4.6": "anthropic/claude-sonnet-4-6",
     "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
+    "🧠 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
+    "⚡ Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
     "🟢 GPT-4o Mini": "openai/gpt-4o-mini",
 }
 
@@ -59,6 +60,10 @@ DEFAULT_PROFILE = """Даня, студент 4 курса, ~1 год опыта
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
+_BROKEN_MODELS = {"google/gemini-3.1-flash-lite-preview", "google/gemini-3.1-flash"}
+DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
+
+
 def load() -> dict:
     if DATA_FILE.exists():
         data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
@@ -66,12 +71,15 @@ def load() -> dict:
         data.setdefault("focus_auto_reset", False)
         # Remove any leaked key from the data file
         data.pop("openrouter_key", None)
+        # Migrate away from broken/non-existent models
+        if data.get("model") in _BROKEN_MODELS:
+            data["model"] = DEFAULT_MODEL
         return data
     return {
         "description": DEFAULT_PROFILE,
         "current_focus": "",
         "focus_auto_reset": False,
-        "model": "google/gemini-3.1-flash-lite-preview",
+        "model": DEFAULT_MODEL,
         "channels": DEFAULT_CHANNELS[:],
         "last_digest": "",
         "last_digest_time": "",
@@ -247,7 +255,7 @@ async def job_digest(context: ContextTypes.DEFAULT_TYPE):
 async def job_checkin(context: ContextTypes.DEFAULT_TYPE):
     data = load()
     focus = data.get("current_focus", "")
-    focus_line = f" Как дела с *{focus}*?" if focus else ""
+    focus_line = f" Как дела с *{escape_markdown(focus, version=1)}*?" if focus else ""
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Прочитал", callback_data="ci_yes"),
         InlineKeyboardButton("❌ Не успел", callback_data="ci_no"),
@@ -433,10 +441,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "👤 Профиль":
-        body = f"👤 *Профиль*\n\n{data['description']}"
+        description = escape_markdown(data["description"], version=1)
+        body = f"👤 *Профиль*\n\n{description}"
         if focus:
-            body += f"\n\n🎯 *Фокус:* {focus}"
-        body += f"\n\n🤖 `{data['model']}`\n📡 Каналов: {len(data['channels'])}: {', '.join(data['channels'])}"
+            body += f"\n\n🎯 *Фокус:* {escape_markdown(focus, version=1)}"
+        model = escape_markdown(data["model"], version=1)
+        channels = ", ".join(escape_markdown(ch, version=1) for ch in data["channels"])
+        body += f"\n\n🤖 `{model}`\n📡 Каналов: {len(data['channels'])}: {channels}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("✏️ Изменить", callback_data="edit_profile")]])
         await update.message.reply_text(body, reply_markup=kb, parse_mode="Markdown")
         return
