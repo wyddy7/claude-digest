@@ -5,9 +5,9 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai import Agent, PromptedOutput
+from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,10 @@ CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 # ── Structured output schema ──────────────────────────────────────────────────
 
 class Insight(BaseModel):
+    """Один инсайт из дайджеста."""
     title: str    # 3-6 слов, название инсайта
     channel: str  # username канала без @
-    url: Optional[str] = None # полная ссылка https://t.me/channel/123 — ТОЛЬКО из списка постов
+    url: Optional[str] = None  # полная ссылка https://t.me/channel/123 — ТОЛЬКО из списка постов
     what: str     # что это — одно предложение
     how: str      # как конкретно применить — команда/шаг/инструмент
 
@@ -28,23 +29,23 @@ class Insight(BaseModel):
     def ensure_url(cls, v: str, info) -> str:
         if isinstance(v, str) and v.startswith("https://t.me/"):
             return v
-        # Fallback to channel base URL if model returned garbage
         channel = (info.data or {}).get("channel", "")
         return f"https://t.me/{channel}" if channel else "https://t.me"
 
 
 class DigestResult(BaseModel):
-    insights: list[Insight]   # 3-6 инсайтов
-    personal: list[str]       # 2-3 пункта лично для Дании
-    today: str                # одно конкретное действие сегодня
+    """Структурированный дайджест Telegram-каналов."""
+    insights: list[Insight]  # 3-6 инсайтов
+    personal: list[str]      # 2-3 пункта лично для Дании
+    today: str               # одно конкретное действие сегодня
 
 
 # ── Model factory ─────────────────────────────────────────────────────────────
 
-def _make_model(api_key: str, model_id: str) -> OpenAIChatModel:
-    return OpenAIChatModel(
-        model_id, 
-        provider=OpenAIProvider(base_url=OPENROUTER_BASE, api_key=api_key)
+def _make_openrouter_model(api_key: str, model_id: str) -> OpenRouterModel:
+    return OpenRouterModel(
+        model_id,
+        provider=OpenRouterProvider(api_key=api_key),
     )
 
 
@@ -79,7 +80,7 @@ def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = Non
 Правило: только конкретные команды/файлы/шаги. Никаких "можно изучить X" или "открывает горизонты"."""
 
 
-# ── Digest generation via PydanticAI (guaranteed structured links) ────────────
+# ── Digest generation via PydanticAI ─────────────────────────────────────────
 
 def _format_posts(posts: list[dict]) -> str:
     parts = []
@@ -130,39 +131,33 @@ async def generate_digest(
     system = build_system_prompt(user_data, recent_digests)
 
     try:
-        model = _make_model(api_key, model_id)
-        # Правильное использование Pydantic AI: result_type, retries и defer_model_check
+        model = _make_openrouter_model(api_key, model_id)
         agent = Agent(
             model,
-            result_type=DigestResult,
+            output_type=PromptedOutput(DigestResult),
             system_prompt=system,
-            retries=3,
-            defer_model_check=True
+            retries=2,
         )
         result = await agent.run(prompt)
-        return _to_html(result.data)
+        return _to_html(result.output)
     except Exception as e:
         logger.error(f"pydantic-ai digest error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return f"Ошибка генерации дайджеста: {e}"
 
 
 # ── Image filtering ───────────────────────────────────────────────────────────
 
 async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> list[bytes]:
-    """
-    Фильтрует изображения, оставляя только те, что тематически подходят под сгенерированный дайджест.
-    Использует Vision-модель для анализа.
-    """
+    """Фильтрует изображения, оставляя только тематически подходящие к дайджесту."""
     if not images:
         return []
-    
+
     client = _get_client(api_key)
-    # Ограничиваем количество картинок для анализа, чтобы не тратить токены
     approved = []
-    
-    # Подготавливаем краткую версию дайджеста для контекста
-    context = digest_text[:1500] 
-    
+    context = digest_text[:1500]
+
     for img_bytes in images[:10]:
         b64 = base64.b64encode(img_bytes).decode()
         try:
@@ -193,9 +188,8 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
                 approved.append(img_bytes)
         except Exception as e:
             logger.warning(f"image filter error: {e}")
-            # В случае ошибки API лучше пропустить картинку, чем уронить весь процесс
             continue
-            
+
     return approved
 
 
