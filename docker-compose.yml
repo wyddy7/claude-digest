@@ -1,0 +1,9 @@
+services:
+  digest-bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data.json:/app/data.json
+      - ./digests_history.json:/app/digests_history.json
