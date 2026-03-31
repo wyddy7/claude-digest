@@ -42,11 +42,10 @@ MOSCOW = pytz.timezone("Europe/Moscow")
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 
 MODELS = {
+    "🔵 Gemini 3.1 Flash Lite": "google/gemini-3.1-flash-lite-preview",
     "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
     "🧠 Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
-    "💎 Claude 3 Opus": "anthropic/claude-3-opus",
     "🟢 GPT-4o Mini": "openai/gpt-4o-mini",
-    "🔵 Gemini Flash 3.1": "google/gemini-3.1-flash-lite-preview",
     "🆓 Gemma 2 9B (free)": "google/gemma-2-9b-it:free",
 }
 
@@ -72,7 +71,7 @@ def load() -> dict:
         "description": DEFAULT_PROFILE,
         "current_focus": "",
         "focus_auto_reset": False,
-        "model": "anthropic/claude-3.5-haiku",
+        "model": "google/gemini-3.1-flash-lite-preview",
         "channels": DEFAULT_CHANNELS[:],
         "last_digest": "",
         "last_digest_time": "",

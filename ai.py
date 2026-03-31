@@ -143,9 +143,16 @@ async def generate_digest(
 
     try:
         model = _make_model(api_key, model_id)
-        agent = Agent(model, output_type=DigestResult, system_prompt=system)
+        # Правильное использование Pydantic AI: result_type, retries и defer_model_check
+        agent = Agent(
+            model,
+            result_type=DigestResult,
+            system_prompt=system,
+            retries=3,
+            defer_model_check=True
+        )
         result = await agent.run(prompt)
-        return _to_html(result.output)
+        return _to_html(result.data)
     except Exception as e:
         logger.error(f"pydantic-ai digest error: {e}")
         return f"Ошибка генерации дайджеста: {e}"
