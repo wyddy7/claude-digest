@@ -346,12 +346,12 @@ async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("Запись не найдена.")
         return
     d = history[idx]
-    text = f"📰 *Дайджест {d['date']}*\n\n{d['digest']}"
+    text = f"📰 <b>Дайджест {d['date']}</b>\n\n{d['digest']}"
     if len(text) > 4000:
         text = text[:4000] + "…"
     back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Список", callback_data="hp|0")]])
     await q.edit_message_text(
-        text, reply_markup=back_kb, parse_mode="Markdown", disable_web_page_preview=True
+        text, reply_markup=back_kb, parse_mode="HTML", disable_web_page_preview=True
     )
 
 
@@ -368,8 +368,8 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("Держи дайджест ещё раз:")
             await context.bot.send_message(
                 q.message.chat_id,
-                f"📰 *Дайджест*\n\n{data['last_digest']}",
-                parse_mode="Markdown",
+                f"📰 <b>Дайджест</b>\n\n{data['last_digest']}",
+                parse_mode="HTML",
                 disable_web_page_preview=True,
             )
         else:
