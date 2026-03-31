@@ -46,7 +46,7 @@ MODELS = {
     "🧠 Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
     "💎 Claude 3 Opus": "anthropic/claude-3-opus",
     "🟢 GPT-4o Mini": "openai/gpt-4o-mini",
-    "🔵 Gemini Flash 1.5": "google/gemini-flash-1.5",
+    "🔵 Gemini Flash 3.1": "google/gemini-3.1-flash-lite-preview",
     "🆓 Gemma 2 9B (free)": "google/gemma-2-9b-it:free",
 }
 
