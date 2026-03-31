@@ -28,6 +28,21 @@ uv run bot.py
 
 Или просто дважды кликни **run.bat**.
 
+### Остановить / убить все экземпляры бота (Windows)
+
+Если бот завис или запущено несколько копий (конфликт polling):
+```cmd
+taskkill /f /fi "WINDOWTITLE eq bot.py*" /im python.exe
+```
+Или жёстко убить всех Python-процессов (осторожно, если есть другие скрипты):
+```cmd
+taskkill /f /im python.exe
+```
+Проверить, что процессов нет:
+```cmd
+tasklist | findstr python
+```
+
 ### 4. В Telegram отправь /start своему боту
 
 ---

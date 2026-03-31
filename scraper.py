@@ -51,10 +51,14 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                     dt_str = time_tag.get("datetime", "")
                     try:
                         post_time = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-                        if post_time < cutoff:
-                            continue
                     except Exception:
                         pass
+
+                # Skip posts without parseable timestamp — better than including old ones
+                if post_time is None:
+                    continue
+                if post_time < cutoff:
+                    continue
 
                 link = ""
                 link_tag = msg.find("a", class_="tgme_widget_message_date")
