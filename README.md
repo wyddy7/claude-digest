@@ -70,7 +70,7 @@ docker compose down
 # Перезапустить после обновления кода
 docker compose up -d --build
 ```
-
+ 
 ### Персистентность данных
 `data.json` и `digests_history.json` монтируются как volumes — данные сохраняются между перезапусками контейнера.
 
