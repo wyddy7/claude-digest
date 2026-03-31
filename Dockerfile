@@ -9,7 +9,4 @@ RUN uv sync --no-dev
 
 COPY bot.py scraper.py ai.py ./
 
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
-
-ENTRYPOINT ["./entrypoint.sh"]
+CMD ["uv", "run", "bot.py"]
