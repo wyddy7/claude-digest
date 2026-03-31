@@ -42,11 +42,11 @@ MOSCOW = pytz.timezone("Europe/Moscow")
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 
 MODELS = {
-    "🔵 Gemini 3.1 Flash Lite": "google/gemini-3.1-flash-lite-preview",
-    "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
+    "⚡ Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
     "🧠 Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
+    "🚀 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
+    "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
     "🟢 GPT-4o Mini": "openai/gpt-4o-mini",
-    "🆓 Gemma 2 9B (free)": "google/gemma-2-9b-it:free",
 }
 
 
@@ -174,42 +174,69 @@ async def do_send_digest(bot, chat_id: int):
     user_data_for_ai = data.copy()
     user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
 
-    digest = await generate_digest(posts, user_data_for_ai, recent_digests=recent)
+    digest_html = await generate_digest(posts, user_data_for_ai, recent_digests=recent)
 
     # Auto-reset focus after digest if enabled
     if data.get("focus_auto_reset") and data.get("current_focus"):
         data["current_focus"] = ""
 
-    data["last_digest"] = digest
+    data["last_digest"] = digest_html
     data["last_digest_time"] = datetime.now().isoformat()
     add_history(data, f"Дайджест ({len(posts)} постов)")
     save(data)
-    append_to_history(digest, len(posts))
+    append_to_history(digest_html, len(posts))
 
     date_str = datetime.now(MOSCOW).strftime("%d.%m.%Y")
+    full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
+
+    # Filter images
+    raw_images = [p["image_bytes"] for p in posts if p.get("image_bytes")]
+    logger.info(f"Raw images found: {len(raw_images)}")
+    
+    approved = []
+    if raw_images:
+        # Передаем текст дайджеста для более точной фильтрации
+        approved = await filter_images(raw_images, digest_html, OPENROUTER_KEY)
+        logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
+
+    if approved:
+        # Если есть картинки, отправляем их группой. 
+        # Текст дайджеста кладем в caption ПЕРВОЙ картинки (лимит 1024 символа для caption).
+        # Если текст длиннее, отправляем текст отдельно, а картинки - ответом.
+        
+        if len(full_text) <= 1024:
+            media = []
+            for i, img_bytes in enumerate(approved[:10]):
+                media.append(InputMediaPhoto(
+                    BytesIO(img_bytes), 
+                    caption=full_text if i == 0 else None,
+                    parse_mode="HTML" if i == 0 else None
+                ))
+            try:
+                await bot.send_media_group(chat_id, media)
+                logger.info(f"Sent {len(media)} images with caption")
+                return
+            except Exception as e:
+                logger.warning(f"send_media_group with caption failed: {e}")
+        
+    # Fallback: отправляем текст отдельно, картинки (если есть) - ответом
     digest_msg = await bot.send_message(
         chat_id,
-        f"📰 <b>Дайджест {date_str}</b>\n\n{digest}",
+        full_text,
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
 
-    # Filter and send images as reply to digest
-    raw_images = [p["image_bytes"] for p in posts if p.get("image_bytes")]
-    logger.info(f"Raw images found: {len(raw_images)}")
-    if raw_images:
-        approved = await filter_images(raw_images, digest, OPENROUTER_KEY)
-        logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
-        if approved:
-            media = [InputMediaPhoto(BytesIO(b)) for b in approved[:10]]
-            try:
-                await bot.send_media_group(
-                    chat_id, media,
-                    reply_to_message_id=digest_msg.message_id,
-                )
-                logger.info(f"Sent {len(media)} images")
-            except Exception as e:
-                logger.warning(f"send_media_group failed: {e}")
+    if approved:
+        media = [InputMediaPhoto(BytesIO(b)) for b in approved[:10]]
+        try:
+            await bot.send_media_group(
+                chat_id, media,
+                reply_to_message_id=digest_msg.message_id,
+            )
+            logger.info(f"Sent {len(media)} images as reply")
+        except Exception as e:
+            logger.warning(f"send_media_group as reply failed: {e}")
 
 
 async def job_digest(context: ContextTypes.DEFAULT_TYPE):
