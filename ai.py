@@ -119,12 +119,12 @@ def _format_posts(posts: list[dict]) -> str:
                 date_str = dt.strftime("%d.%m.%Y %H:%M UTC")
             except Exception:
                 date_str = post_time_raw[:10]
-        prefix = "РўР Р•Р”" if p.get("is_thread") else "РџРћРЎРў"
+        prefix = "ТРЕД" if p.get("is_thread") else "ПОСТ"
         parts.append(
             f"{prefix}: {p['channel']}\n"
-            f"Р”РђРўРђ: {date_str}\n"
-            f"РЎРЎР«Р›РљРђ: {link}\n"
-            f"РўР•РљРЎРў:\n{p['text'][:1600]}"
+            f"ДАТА: {date_str}\n"
+            f"ССЫЛКА: {link}\n"
+            f"ТЕКСТ:\n{p['text'][:1600]}"
         )
     return "\n\n---\n\n".join(parts)
 
@@ -136,9 +136,9 @@ def _to_html_digest(d: DigestResult) -> str:
         header = f'<a href="{src.url}">{escape(src.channel)}</a>{date_label}'
         lines = [header]
         for bullet in src.bullets:
-            lines.append(f"вЂ” {escape(bullet)}")
+            lines.append(f"— {escape(bullet)}")
         if src.example:
-            lines.append(f"рџ’Ў {escape(src.example)}")
+            lines.append(f"💡 {escape(src.example)}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -146,16 +146,16 @@ def _to_html_digest(d: DigestResult) -> str:
 def _to_html_personal(d: DigestResult) -> str | None:
     if not d.personal:
         return None
-    lines = ["<b>Р›РёС‡РЅРѕ С‚РµР±Рµ:</b>"]
+    lines = ["<b>Лично тебе:</b>"]
     for item in d.personal:
-        lines.append(f"вЂў {escape(item)}")
+        lines.append(f"• {escape(item)}")
     return "\n".join(lines)
 
 
 def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: int) -> str:
     return (
-        f"<i>рџ“Љ РџСЂРѕРІРµСЂРµРЅРѕ {posts_checked} РїРѕСЃС‚РѕРІ РёР· {channels_count} РєР°РЅР°Р»РѕРІ, "
-        f"РІС‹Р±СЂР°РЅРѕ {sources_selected} РёСЃС‚РѕС‡РЅРёРєРѕРІ</i>"
+        f"<i>📊 Проверено {posts_checked} постов из {channels_count} каналов, "
+        f"выбрано {sources_selected} источников</i>"
     )
 
 
@@ -165,23 +165,23 @@ async def generate_digest(
     recent_digests: list[dict] | None = None,
 ) -> tuple[str, str | None, str]:
     if not posts:
-        return "РќРµ РЅР°С€С‘Р» РЅРѕРІС‹С… РїРѕСЃС‚РѕРІ Р·Р° РїРѕСЃР»РµРґРЅРёРµ 24 С‡Р°СЃР°.", None, ""
+        return "Не нашёл новых постов за последние 24 часа.", None, ""
 
     model_id = user_data.get("model", "anthropic/claude-3.5-haiku")
     api_key = user_data["openrouter_key"]
     focus = user_data.get("current_focus", "")
-    focus_line = f"\nР¤РћРљРЈРЎ: В«{focus}В» вЂ” РїСЂРёРѕСЂРёС‚РёР·РёСЂСѓР№ РїРѕСЃС‚С‹ РїСЂРѕ СЌС‚Рѕ" if focus else ""
+    focus_line = f"\nФОКУС: «{focus}» — приоритизируй посты про это" if focus else ""
 
     posts_text = _format_posts(posts)
     prompt = (
-        f"РџРѕСЃС‚С‹ РёР· Telegram-РєР°РЅР°Р»РѕРІ:{focus_line}\n\n"
+        f"Посты из Telegram-каналов:{focus_line}\n\n"
         f"{posts_text}\n\n---\n"
-        "РЎРіСЂСѓРїРїРёСЂСѓР№ РїРѕ РёСЃС‚РѕС‡РЅРёРєР°Рј (4-6 СЃР°РјС‹С… РёРЅС„РѕСЂРјР°С‚РёРІРЅС‹С… РїРѕСЃС‚РѕРІ). "
-        "Р”Р»СЏ РєР°Р¶РґРѕРіРѕ РёСЃС‚РѕС‡РЅРёРєР°:\n"
-        "- url: РўРћР§РќРђРЇ СЃСЃС‹Р»РєР° РёР· РїРѕР»СЏ РЎРЎР«Р›РљРђ (РЅРµ РїСЂРёРґСѓРјС‹РІР°Р№)\n"
-        "- post_date: РґР°С‚Р° РёР· РїРѕР»СЏ Р”РђРўРђ (С„РѕСЂРјР°С‚ DD.MM.YYYY)\n"
-        "- bullets: РІСЃРµ С„Р°РєС‚С‹ РёР· РїРѕСЃС‚Р°, РѕРґРЅР° СЃС‚СЂРѕРєР° вЂ” РѕРґРёРЅ С„Р°РєС‚\n"
-        "- example: С‚РѕР»СЊРєРѕ РµСЃР»Рё РєРѕРЅС†РµРїС‚ РЅРµС‚СЂРёРІРёР°Р»СЊРЅС‹Р№ вЂ” РѕРґРЅРѕ РїСЂРµРґР»РѕР¶РµРЅРёРµ РєР°Рє РїРµСЂРІРѕРєСѓСЂСЃРЅРёРєСѓ"
+        "Сгруппируй по источникам (4-6 самых информативных постов). "
+        "Для каждого источника:\n"
+        "- url: ТОЧНАЯ ссылка из поля ССЫЛКА (не придумывай)\n"
+        "- post_date: дата из поля ДАТА (формат DD.MM.YYYY)\n"
+        "- bullets: все факты из поста, одна строка — один факт\n"
+        "- example: только если концепт нетривиальный — одно предложение как первокурснику"
     )
 
     system = build_system_prompt(user_data, recent_digests)
@@ -206,7 +206,7 @@ async def generate_digest(
         import traceback
 
         logger.error(traceback.format_exc())
-        return f"РћС€РёР±РєР° РіРµРЅРµСЂР°С†РёРё РґР°Р№РґР¶РµСЃС‚Р°: {e}", None, ""
+        return f"Ошибка генерации дайджеста: {e}", None, ""
 
 
 async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> list[bytes]:
@@ -229,14 +229,14 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
                             {
                                 "type": "text",
                                 "text": (
-                                    "РўС‹ вЂ” РІРёР·СѓР°Р»СЊРЅС‹Р№ СЂРµРґР°РєС‚РѕСЂ. РўРІРѕСЏ Р·Р°РґР°С‡Р°: РѕС‚РѕР±СЂР°С‚СЊ РєР°СЂС‚РёРЅРєРё РґР»СЏ РґР°Р№РґР¶РµСЃС‚Р° РѕР± AI Рё С‚РµС…РЅРѕР»РѕРіРёСЏС….\n"
-                                    f"РўР•РљРЎРў Р”РђР™Р”Р–Р•РЎРўРђ:\n{context}\n\n"
-                                    "РљР°СЂС‚РёРЅРєР° РЈРњР•РЎРўРќРђ, РµСЃР»Рё РѕРЅР°:\n"
-                                    "1. РР»Р»СЋСЃС‚СЂРёСЂСѓРµС‚ РѕРґРёРЅ РёР· РїСѓРЅРєС‚РѕРІ РґР°Р№РґР¶РµСЃС‚Р°.\n"
-                                    "2. РЇРІР»СЏРµС‚СЃСЏ СЃРєСЂРёРЅС€РѕС‚РѕРј РЅРѕРІРѕРіРѕ РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°/РёРЅС‚РµСЂС„РµР№СЃР°.\n"
-                                    "3. Р­С‚Рѕ РєР°С‡РµСЃС‚РІРµРЅРЅРѕРµ С‚РµРјР°С‚РёС‡РµСЃРєРѕРµ С„РѕС‚Рѕ (СЂРѕР±РѕС‚С‹, РєРѕРґ, С‡РёРїС‹).\n"
-                                    "РљР°СЂС‚РёРЅРєР° РќР•РЈРњР•РЎРўРќРђ, РµСЃР»Рё СЌС‚Рѕ: СЂРµРєР»Р°РјР°, РјРµРј РЅРµ РїРѕ С‚РµРјРµ, Р»РёС‡РЅРѕРµ С„РѕС‚Рѕ, РјСѓСЃРѕСЂРЅС‹Р№ СЃРєСЂРёРЅС€РѕС‚.\n\n"
-                                    "РћС‚РІРµС‚СЊ С‚РѕР»СЊРєРѕ РѕРґРЅРёРј СЃР»РѕРІРѕРј: YES РёР»Рё NO."
+                                    "Ты — визуальный редактор. Твоя задача: отобрать картинки для дайджеста об AI и технологиях.\n"
+                                    f"ТЕКСТ ДАЙДЖЕСТА:\n{context}\n\n"
+                                    "Картинка УМЕСТНА, если она:\n"
+                                    "1. Иллюстрирует один из пунктов дайджеста.\n"
+                                    "2. Является скриншотом нового инструмента/интерфейса.\n"
+                                    "3. Это качественное тематическое фото (роботы, код, чипы).\n"
+                                    "Картинка НЕУМЕСТНА, если это: реклама, мем не по теме, личное фото, мусорный скриншот.\n\n"
+                                    "Ответить только одним словом: YES или NO."
                                 ),
                             },
                             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
@@ -261,7 +261,7 @@ async def chat_response(user_message: str, user_data: dict) -> str:
     client = _get_client(user_data["openrouter_key"])
     model = user_data.get("model", "anthropic/claude-3.5-haiku")
     last_digest = user_data.get("last_digest", "")
-    digest_ctx = f"\nРџРћРЎР›Р•Р”РќРР™ Р”РђР™Р”Р–Р•РЎРў:\n{last_digest[:800]}" if last_digest else ""
+    digest_ctx = f"\nПОСЛЕДНИЙ ДАЙДЖЕСТ:\n{last_digest[:800]}" if last_digest else ""
     system = build_system_prompt(user_data) + digest_ctx
     try:
         resp = await client.chat.completions.create(
@@ -275,4 +275,4 @@ async def chat_response(user_message: str, user_data: dict) -> str:
         return resp.choices[0].message.content
     except Exception as e:
         logger.error(f"chat error: {e}")
-        return f"РћС€РёР±РєР°: {e}"
+        return f"Ошибка: {e}"

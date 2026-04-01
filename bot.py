@@ -48,11 +48,11 @@ MOSCOW = pytz.timezone("Europe/Moscow")
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 
 MODELS = {
-    "рџљЂ Claude Sonnet 4.6": "anthropic/claude-sonnet-4-6",
-    "вљЎ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
-    "рџ§  Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
-    "вљЎ Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
-    "рџџў GPT-4o Mini": "openai/gpt-4o-mini",
+    "🚀 Claude Sonnet 4.6": "anthropic/claude-sonnet-4-6",
+    "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
+    "🧠 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
+    "⚡ Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
+    "🟢 GPT-4o Mini": "openai/gpt-4o-mini",
 }
 
 _BROKEN_MODELS = {"google/gemini-3.1-flash-lite-preview", "google/gemini-3.1-flash"}
@@ -97,9 +97,9 @@ def save(data: dict):
 
 
 def add_history(data: dict, entry: str):
-    h = data.setdefault("interaction_history", [])
-    h.append(f"{datetime.now().strftime('%d.%m %H:%M')} вЂ” {entry[:120]}")
-    data["interaction_history"] = h[-20:]
+    history = data.setdefault("interaction_history", [])
+    history.append(f"{datetime.now().strftime('%d.%m %H:%M')} — {entry[:120]}")
+    data["interaction_history"] = history[-20:]
 
 
 def load_history() -> list:
@@ -113,7 +113,7 @@ def load_history() -> list:
 
 def append_to_history(digest: str, posts_count: int):
     history = load_history()
-    is_error = digest.startswith("РћС€РёР±РєР°") or digest.startswith("РќРµ РЅР°С€С‘Р»")
+    is_error = digest.startswith("Ошибка") or digest.startswith("Не нашёл")
     history.append(
         {
             "id": len(history) + 1,
@@ -131,11 +131,11 @@ def append_to_history(digest: str, posts_count: int):
 
 
 def main_kb(focus: str = "") -> ReplyKeyboardMarkup:
-    focus_btn = f"рџЋЇ {focus[:28]}" if focus else "рџЋЇ Р—Р°РґР°С‚СЊ С„РѕРєСѓСЃ"
+    focus_btn = f"🎯 {focus[:28]}" if focus else "🎯 Задать фокус"
     return ReplyKeyboardMarkup(
         [
-            ["рџ“° Р”Р°Р№РґР¶РµСЃС‚", "рџ“љ РСЃС‚РѕСЂРёСЏ"],
-            ["рџ‘¤ РџСЂРѕС„РёР»СЊ", "вљ™пёЏ РќР°СЃС‚СЂРѕР№РєРё"],
+            ["📰 Дайджест", "📚 История"],
+            ["👤 Профиль", "⚙️ Настройки"],
             [focus_btn],
         ],
         resize_keyboard=True,
@@ -149,19 +149,19 @@ def history_kb(history: list, page: int = 0, per_page: int = 5) -> InlineKeyboar
     end = min(start + per_page, total)
     rows = []
     for i in range(start, end):
-        d = history[i]
-        did = d.get("id", i + 1)
-        date_short = d["date"][5:].replace("-", ".")
-        if d.get("is_error"):
-            label = f"вќЊ {date_short} #{did}"
+        item = history[i]
+        digest_id = item.get("id", i + 1)
+        date_short = item["date"][5:].replace("-", ".")
+        if item.get("is_error"):
+            label = f"❌ {date_short} #{digest_id}"
         else:
-            label = f"рџ“° {date_short} #{did}  ({d['posts_count']} РїРѕСЃС‚РѕРІ)"
+            label = f"📰 {date_short} #{digest_id} ({item['posts_count']} постов)"
         rows.append([InlineKeyboardButton(label, callback_data=f"hv|{i}")])
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("в¬…пёЏ", callback_data=f"hp|{page - 1}"))
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"hp|{page - 1}"))
     if end < total:
-        nav.append(InlineKeyboardButton("вћЎпёЏ", callback_data=f"hp|{page + 1}"))
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"hp|{page + 1}"))
     if nav:
         rows.append(nav)
     return InlineKeyboardMarkup(rows)
@@ -170,22 +170,22 @@ def history_kb(history: list, page: int = 0, per_page: int = 5) -> InlineKeyboar
 def settings_kb(current_model: str, channels: list, auto_reset: bool = False) -> InlineKeyboardMarkup:
     rows = []
     for label, model_id in MODELS.items():
-        mark = "вњ… " if model_id == current_model else ""
+        mark = "✅ " if model_id == current_model else ""
         rows.append([InlineKeyboardButton(f"{mark}{label}", callback_data=f"model|{model_id}")])
-    rows.append([InlineKeyboardButton(f"рџ“Ў РљР°РЅР°Р»С‹ ({len(channels)})", callback_data="channels")])
+    rows.append([InlineKeyboardButton(f"📡 Каналы ({len(channels)})", callback_data="channels")])
     reset_label = (
-        "рџ”„ РЎР±СЂРѕСЃ С„РѕРєСѓСЃР° РїРѕСЃР»Рµ РґР°Р№РґР¶РµСЃС‚Р°: Р’РљР› вњ…"
+        "🔄 Сброс фокуса после дайджеста: ВКЛ ✅"
         if auto_reset
-        else "рџ”„ РЎР±СЂРѕСЃ С„РѕРєСѓСЃР° РїРѕСЃР»Рµ РґР°Р№РґР¶РµСЃС‚Р°: Р’Р«РљР›"
+        else "🔄 Сброс фокуса после дайджеста: ВЫКЛ"
     )
     rows.append([InlineKeyboardButton(reset_label, callback_data="toggle_autoreset")])
     return InlineKeyboardMarkup(rows)
 
 
 def channels_kb(channels: list) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(f"вќЊ {ch}", callback_data=f"rmch|{ch}")] for ch in channels]
-    rows.append([InlineKeyboardButton("вћ• Р”РѕР±Р°РІРёС‚СЊ РєР°РЅР°Р»", callback_data="addch")])
-    rows.append([InlineKeyboardButton("в†ђ РќР°Р·Р°Рґ", callback_data="back_settings")])
+    rows = [[InlineKeyboardButton(f"❌ {channel}", callback_data=f"rmch|{channel}")] for channel in channels]
+    rows.append([InlineKeyboardButton("➕ Добавить канал", callback_data="addch")])
+    rows.append([InlineKeyboardButton("← Назад", callback_data="back_settings")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -193,9 +193,9 @@ async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user and update.effective_user.id != OWNER_ID:
         logger.warning(f"Unauthorized access attempt from user {update.effective_user.id}")
         if update.callback_query:
-            await _safe_answer(update.callback_query, "в›” РќРµС‚ РґРѕСЃС‚СѓРїР°", show_alert=True)
+            await _safe_answer(update.callback_query, "⛔ Нет доступа", show_alert=True)
         elif update.message:
-            await update.message.reply_text("в›” РќРµС‚ РґРѕСЃС‚СѓРїР°")
+            await update.message.reply_text("⛔ Нет доступа")
         raise ApplicationHandlerStop
 
 
@@ -208,7 +208,9 @@ async def do_send_digest(bot, chat_id: int):
     user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
 
     digest_html, personal_html, stats_html = await generate_digest(
-        posts, user_data_for_ai, recent_digests=recent
+        posts,
+        user_data_for_ai,
+        recent_digests=recent,
     )
 
     if data.get("focus_auto_reset") and data.get("current_focus"):
@@ -216,14 +218,14 @@ async def do_send_digest(bot, chat_id: int):
 
     data["last_digest"] = digest_html
     data["last_digest_time"] = datetime.now().isoformat()
-    add_history(data, f"Р”Р°Р№РґР¶РµСЃС‚ ({len(posts)} РїРѕСЃС‚РѕРІ)")
+    add_history(data, f"Дайджест ({len(posts)} постов)")
     save(data)
     append_to_history(digest_html, len(posts))
 
     date_str = datetime.now(MOSCOW).strftime("%d.%m.%Y")
-    full_text = f"рџ“° <b>Р”Р°Р№РґР¶РµСЃС‚ {date_str}</b>\n\n{digest_html}"
+    full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
 
-    raw_images = [p["image_bytes"] for p in posts if p.get("image_bytes")]
+    raw_images = [post["image_bytes"] for post in posts if post.get("image_bytes")]
     logger.info(f"Raw images found: {len(raw_images)}")
 
     approved = []
@@ -232,7 +234,7 @@ async def do_send_digest(bot, chat_id: int):
         logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
 
     if approved:
-        media = [InputMediaPhoto(BytesIO(b)) for b in approved[:10]]
+        media = [InputMediaPhoto(BytesIO(image)) for image in approved[:10]]
         try:
             await bot.send_media_group(chat_id, media)
             logger.info(f"Sent {len(media)} images before digest")
@@ -267,7 +269,7 @@ async def do_send_digest(bot, chat_id: int):
             disable_web_page_preview=True,
         )
 
-    personal_parts = [p for p in [personal_html, stats_html] if p]
+    personal_parts = [part for part in [personal_html, stats_html] if part]
     if personal_parts:
         await bot.send_message(
             chat_id,
@@ -278,24 +280,24 @@ async def do_send_digest(bot, chat_id: int):
 
 
 async def job_digest(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(CHAT_ID, "вЏі РЎРѕР±РёСЂР°СЋ РґР°Р№РґР¶РµСЃС‚...")
+    await context.bot.send_message(CHAT_ID, "⏳ Собираю дайджест...")
     await do_send_digest(context.bot, CHAT_ID)
 
 
 async def job_checkin(context: ContextTypes.DEFAULT_TYPE):
     data = load()
     focus = data.get("current_focus", "")
-    focus_line = f" РљР°Рє РґРµР»Р° СЃ *{escape_markdown(focus, version=1)}*?" if focus else ""
+    focus_line = f" Как дела с *{escape_markdown(focus, version=1)}*?" if focus else ""
     kb = InlineKeyboardMarkup(
         [[
-            InlineKeyboardButton("вњ… РџСЂРѕС‡РёС‚Р°Р»", callback_data="ci_yes"),
-            InlineKeyboardButton("вќЊ РќРµ СѓСЃРїРµР»", callback_data="ci_no"),
-            InlineKeyboardButton("рџ’¬ РџРѕРіРѕРІРѕСЂРёС‚СЊ", callback_data="ci_talk"),
+            InlineKeyboardButton("✅ Прочитал", callback_data="ci_yes"),
+            InlineKeyboardButton("❌ Не успел", callback_data="ci_no"),
+            InlineKeyboardButton("💬 Поговорить", callback_data="ci_talk"),
         ]]
     )
     await context.bot.send_message(
         CHAT_ID,
-        f"Р­Р№, СѓСЃРїРµР» РіР»СЏРЅСѓС‚СЊ РґР°Р№РґР¶РµСЃС‚?{focus_line}",
+        f"Эй, успел глянуть дайджест?{focus_line}",
         reply_markup=kb,
         parse_mode="Markdown",
     )
@@ -314,7 +316,7 @@ async def cb_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load()
     data["model"] = model_id
     save(data)
-    await _safe_answer(q, f"вњ… {model_id}")
+    await _safe_answer(q, f"✅ {model_id}")
     await q.edit_message_reply_markup(
         reply_markup=settings_kb(model_id, data["channels"], data.get("focus_auto_reset", False))
     )
@@ -325,7 +327,7 @@ async def cb_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _safe_answer(q)
     data = load()
     await q.edit_message_text(
-        "рџ“Ў *РљР°РЅР°Р»С‹* вЂ” РЅР°Р¶РјРё вќЊ С‡С‚РѕР±С‹ СѓРґР°Р»РёС‚СЊ:",
+        "📡 *Каналы* — нажми ❌ чтобы удалить:",
         reply_markup=channels_kb(data["channels"]),
         parse_mode="Markdown",
     )
@@ -333,14 +335,14 @@ async def cb_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_rmch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    ch = q.data.split("|", 1)[1]
+    channel = q.data.split("|", 1)[1]
     data = load()
-    if ch in data["channels"]:
-        data["channels"].remove(ch)
+    if channel in data["channels"]:
+        data["channels"].remove(channel)
         save(data)
-    await _safe_answer(q, f"РЈРґР°Р»С‘РЅ: {ch}")
+    await _safe_answer(q, f"Удалён: {channel}")
     await q.edit_message_text(
-        "рџ“Ў *РљР°РЅР°Р»С‹*",
+        "📡 *Каналы*",
         reply_markup=channels_kb(data["channels"]),
         parse_mode="Markdown",
     )
@@ -350,7 +352,7 @@ async def cb_addch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await _safe_answer(q)
     context.user_data["state"] = "adding_channel"
-    await q.edit_message_text("Р’РІРµРґРё СЋР·РµСЂРЅРµР№Рј РєР°РЅР°Р»Р° Р±РµР· @:\n\n/cancel вЂ” РѕС‚РјРµРЅР°")
+    await q.edit_message_text("Введи юзернейм канала без @:\n\n/cancel — отмена")
 
 
 async def cb_back_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -358,7 +360,7 @@ async def cb_back_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _safe_answer(q)
     data = load()
     await q.edit_message_text(
-        "вљ™пёЏ *РќР°СЃС‚СЂРѕР№РєРё*",
+        "⚙️ *Настройки*",
         reply_markup=settings_kb(data["model"], data["channels"], data.get("focus_auto_reset", False)),
         parse_mode="Markdown",
     )
@@ -370,7 +372,7 @@ async def cb_hp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     await _safe_answer(q)
     await q.edit_message_text(
-        f"рџ“љ *РСЃС‚РѕСЂРёСЏ* ({len(history)} РґР°Р№РґР¶РµСЃС‚РѕРІ)",
+        f"📚 *История* ({len(history)} дайджестов)",
         reply_markup=history_kb(history, page),
         parse_mode="Markdown",
     )
@@ -382,22 +384,22 @@ async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = load_history()
     await _safe_answer(q)
     if idx >= len(history):
-        await q.edit_message_text("Р—Р°РїРёСЃСЊ РЅРµ РЅР°Р№РґРµРЅР°.")
+        await q.edit_message_text("Запись не найдена.")
         return
-    d = history[idx]
-    did = d.get("id", idx + 1)
-    text = f"рџ“° <b>Р”Р°Р№РґР¶РµСЃС‚ {d['date']} #{did}</b>\n\n{d['digest']}"
+    item = history[idx]
+    digest_id = item.get("id", idx + 1)
+    text = f"📰 <b>Дайджест {item['date']} #{digest_id}</b>\n\n{item['digest']}"
     if len(text) > 4000:
-        header = f"рџ“° <b>Р”Р°Р№РґР¶РµСЃС‚ {d['date']} #{did}</b>\n\n"
-        body = d["digest"]
+        header = f"📰 <b>Дайджест {item['date']} #{digest_id}</b>\n\n"
+        body = item["digest"]
         truncated = header
         for para in body.split("\n\n"):
             candidate = truncated + ("\n\n" if truncated != header else "") + para
             if len(candidate) > 3900:
                 break
             truncated = candidate
-        text = truncated + "\n\n<i>(СЃРѕРєСЂР°С‰РµРЅРѕ)</i>"
-    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("в†ђ РЎРїРёСЃРѕРє", callback_data="hp|0")]])
+        text = truncated + "\n\n<i>(сокращено)</i>"
+    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Список", callback_data="hp|0")]])
     await q.edit_message_text(
         text,
         reply_markup=back_kb,
@@ -411,24 +413,24 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = q.data
     data = load()
     if action == "ci_yes":
-        await _safe_answer(q, "РћРіРѕРЅСЊ! рџ”Ґ")
-        await q.edit_message_text("РћРіРѕРЅСЊ! рџ”Ґ Р—Р°РІС‚СЂР° РІ 13:00.")
+        await _safe_answer(q, "Огонь! 🔥")
+        await q.edit_message_text("Огонь! 🔥 Завтра в 13:00.")
     elif action == "ci_no":
         await _safe_answer(q)
         if data["last_digest"]:
-            await q.edit_message_text("Р”РµСЂР¶Рё РґР°Р№РґР¶РµСЃС‚ РµС‰С‘ СЂР°Р·:")
+            await q.edit_message_text("Держи дайджест ещё раз:")
             await context.bot.send_message(
                 q.message.chat_id,
-                f"рџ“° <b>Р”Р°Р№РґР¶РµСЃС‚</b>\n\n{data['last_digest']}",
+                f"📰 <b>Дайджест</b>\n\n{data['last_digest']}",
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
         else:
-            await q.edit_message_text("Р”Р°Р№РґР¶РµСЃС‚ РµС‰С‘ РЅРµ Р·Р°РїСѓСЃРєР°Р»СЃСЏ.")
+            await q.edit_message_text("Дайджест ещё не запускался.")
     elif action == "ci_talk":
         await _safe_answer(q)
         context.user_data["state"] = "chat"
-        await q.edit_message_text("РџРёС€Рё, СЃР»СѓС€Р°СЋ рџ‘‡")
+        await q.edit_message_text("Пиши, слушаю 👇")
 
 
 async def cb_toggle_autoreset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -436,8 +438,8 @@ async def cb_toggle_autoreset(update: Update, context: ContextTypes.DEFAULT_TYPE
     data = load()
     data["focus_auto_reset"] = not data.get("focus_auto_reset", False)
     save(data)
-    status = "Р’РљР›" if data["focus_auto_reset"] else "Р’Р«РљР›"
-    await _safe_answer(q, f"РђРІС‚Рѕ-СЃР±СЂРѕСЃ С„РѕРєСѓСЃР°: {status}")
+    status = "ВКЛ" if data["focus_auto_reset"] else "ВЫКЛ"
+    await _safe_answer(q, f"Авто-сброс фокуса: {status}")
     await q.edit_message_reply_markup(
         reply_markup=settings_kb(data["model"], data["channels"], data["focus_auto_reset"])
     )
@@ -446,10 +448,10 @@ async def cb_toggle_autoreset(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def cb_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await _safe_answer(q)
-    await q.edit_message_text("Profile editing moved to config/personalization.yaml")
+    await q.edit_message_text("Профиль теперь редактируется в config/personalization.yaml")
 
 
-KB_BUTTONS = {"рџ“° Р”Р°Р№РґР¶РµСЃС‚", "рџ“љ РСЃС‚РѕСЂРёСЏ", "рџ‘¤ РџСЂРѕС„РёР»СЊ", "вљ™пёЏ РќР°СЃС‚СЂРѕР№РєРё"}
+KB_BUTTONS = {"📰 Дайджест", "📚 История", "👤 Профиль", "⚙️ Настройки"}
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -459,57 +461,57 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "/cancel":
         context.user_data.pop("state", None)
-        await update.message.reply_text("РћС‚РјРµРЅРµРЅРѕ.", reply_markup=main_kb(focus))
+        await update.message.reply_text("Отменено.", reply_markup=main_kb(focus))
         return
 
-    if text in KB_BUTTONS or text.startswith("рџЋЇ"):
+    if text in KB_BUTTONS or text.startswith("🎯"):
         context.user_data.pop("state", None)
 
-    if text == "рџ“° Р”Р°Р№РґР¶РµСЃС‚":
-        await update.message.reply_text("вЏі Р§РёС‚Р°СЋ РєР°РЅР°Р»С‹...", reply_markup=main_kb(focus))
+    if text == "📰 Дайджест":
+        await update.message.reply_text("⏳ Читаю каналы...", reply_markup=main_kb(focus))
         await do_send_digest(context.bot, update.effective_chat.id)
         return
 
-    if text == "рџ“љ РСЃС‚РѕСЂРёСЏ":
+    if text == "📚 История":
         history = load_history()
         if not history:
             await update.message.reply_text(
-                "РСЃС‚РѕСЂРёСЏ РїСѓСЃС‚Р° вЂ” Р·Р°РїСѓСЃС‚Рё РїРµСЂРІС‹Р№ РґР°Р№РґР¶РµСЃС‚!",
+                "История пуста — запусти первый дайджест!",
                 reply_markup=main_kb(focus),
             )
             return
         await update.message.reply_text(
-            f"рџ“љ *РСЃС‚РѕСЂРёСЏ* ({len(history)} РґР°Р№РґР¶РµСЃС‚РѕРІ)",
+            f"📚 *История* ({len(history)} дайджестов)",
             reply_markup=history_kb(history),
             parse_mode="Markdown",
         )
         return
 
-    if text == "рџ‘¤ РџСЂРѕС„РёР»СЊ":
+    if text == "👤 Профиль":
         description = escape_markdown(get_profile_description(), version=1)
-        body = f"рџ‘¤ *РџСЂРѕС„РёР»СЊ*\n\n{description}"
+        body = f"👤 *Профиль*\n\n{description}"
         if focus:
-            body += f"\n\nрџЋЇ *Р¤РѕРєСѓСЃ:* {escape_markdown(focus, version=1)}"
+            body += f"\n\n🎯 *Фокус:* {escape_markdown(focus, version=1)}"
         model = escape_markdown(data["model"], version=1)
         channels = ", ".join(escape_markdown(ch, version=1) for ch in data["channels"])
-        body += f"\n\nрџ¤– `{model}`\nрџ“Ў РљР°РЅР°Р»РѕРІ: {len(data['channels'])}: {channels}"
+        body += f"\n\n🤖 `{model}`\n📡 Каналов: {len(data['channels'])}: {channels}"
         body += "\n\n`config/personalization.yaml`"
         await update.message.reply_text(body, parse_mode="Markdown")
         return
 
-    if text == "вљ™пёЏ РќР°СЃС‚СЂРѕР№РєРё":
+    if text == "⚙️ Настройки":
         await update.message.reply_text(
-            "вљ™пёЏ *РќР°СЃС‚СЂРѕР№РєРё*",
+            "⚙️ *Настройки*",
             reply_markup=settings_kb(data["model"], data["channels"], data.get("focus_auto_reset", False)),
             parse_mode="Markdown",
         )
         return
 
-    if text.startswith("рџЋЇ"):
+    if text.startswith("🎯"):
         context.user_data["state"] = "editing_focus"
-        prompt_text = f"РўРµРєСѓС‰РёР№ С„РѕРєСѓСЃ: {focus}\n\n" if focus else ""
+        prompt_text = f"Текущий фокус: {focus}\n\n" if focus else ""
         await update.message.reply_text(
-            f"{prompt_text}РќР° С‡С‚Рѕ С„РѕРєСѓСЃРёСЂРѕРІР°С‚СЊСЃСЏ РІ СЃР»РµРґСѓСЋС‰РµРј РґР°Р№РґР¶РµСЃС‚Рµ?\n/cancel вЂ” РѕС‚РјРµРЅР°",
+            f"{prompt_text}На что фокусироваться в следующем дайджесте?\n/cancel — отмена",
         )
         return
 
@@ -518,21 +520,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == "editing_focus":
         context.user_data.pop("state")
         data["current_focus"] = text
-        add_history(data, f"Р¤РѕРєСѓСЃ: {text}")
+        add_history(data, f"Фокус: {text}")
         save(data)
-        await update.message.reply_text(f"вњ… Р¤РѕРєСѓСЃ: {text}", reply_markup=main_kb(text))
+        await update.message.reply_text(f"✅ Фокус: {text}", reply_markup=main_kb(text))
         return
 
     if state == "adding_channel":
         context.user_data.pop("state")
-        ch = text.lstrip("@").strip()
-        if ch and ch not in data["channels"]:
-            data["channels"].append(ch)
+        channel = text.lstrip("@").strip()
+        if channel and channel not in data["channels"]:
+            data["channels"].append(channel)
             save(data)
-            await update.message.reply_text(f"вњ… РљР°РЅР°Р» {ch} РґРѕР±Р°РІР»РµРЅ!", reply_markup=main_kb(focus))
+            await update.message.reply_text(f"✅ Канал {channel} добавлен!", reply_markup=main_kb(focus))
         else:
             await update.message.reply_text(
-                "РЈР¶Рµ РµСЃС‚СЊ РёР»Рё РЅРµРєРѕСЂСЂРµРєС‚РЅРѕРµ РёРјСЏ.",
+                "Уже есть или некорректное имя.",
                 reply_markup=main_kb(focus),
             )
         return
@@ -583,10 +585,10 @@ def main():
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load()
     await update.message.reply_text(
-        "РџСЂРёРІРµС‚! РўРІРѕР№ РїРµСЂСЃРѕРЅР°Р»СЊРЅС‹Р№ РґР°Р№РґР¶РµСЃС‚-Р±РѕС‚ рџ¤–\n\n"
-        "вЂў *13:00* вЂ” РґР°Р№РґР¶РµСЃС‚ РёР· РєР°РЅР°Р»РѕРІ\n"
-        "вЂў *18:00* вЂ” С‡РµРєРёРЅ\n\n"
-        "РљРЅРѕРїРєРё СЃРЅРёР·Сѓ рџ‘‡",
+        "Привет! Твой персональный дайджест-бот 🤖\n\n"
+        "• *13:00* — дайджест из каналов\n"
+        "• *18:00* — чекин\n\n"
+        "Кнопки снизу 👇",
         reply_markup=main_kb(data.get("current_focus", "")),
         parse_mode="Markdown",
     )

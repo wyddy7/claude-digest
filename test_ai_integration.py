@@ -114,9 +114,9 @@ try:
     check("html_stripped_from_prev_digests", not has_html_tags)
     check("plain_text_survives_strip", "Insight" in prev_section)
     check("plain_text_command_survives", "pip install x" in prev_section)
-    check("contains_style_rules", "STYLE RULES:" in prompt)
-    check("contains_source_selection", "SOURCE SELECTION:" in prompt)
-    check("contains_stop_words", "STOP WORDS:" in prompt)
+    check("contains_style_rules", "СТИЛЬ:" in prompt)
+    check("contains_source_selection", "ОТБОР ИСТОЧНИКОВ:" in prompt)
+    check("contains_stop_words", "СТОП-СЛОВА:" in prompt)
 except Exception as e:
     FAIL.append("build_system_prompt")
     print(f"  FAIL  build_system_prompt: {e}")
