@@ -9,20 +9,20 @@ from pydantic_ai import Agent, PromptedOutput
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
+from personalization import load_personalization
+
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 
-# ── Structured output schema ──────────────────────────────────────────────────
 
 class SourceBlock(BaseModel):
-    """Один источник (пост/тред) с набором инсайтов."""
-    channel: str        # username без @
-    url: str            # ссылка на пост https://t.me/channel/123
-    post_date: str = "" # дата поста DD.MM.YYYY — из поля ДАТА
-    bullets: list[str]  # 1-5 коротких фактов, одна строка каждый
-    example: str = ""   # необязательно: простая аналогия/объяснение как первокурснику
+    channel: str
+    url: str
+    post_date: str = ""
+    bullets: list[str]
+    example: str = ""
 
     @field_validator("url", mode="before")
     @classmethod
@@ -34,12 +34,9 @@ class SourceBlock(BaseModel):
 
 
 class DigestResult(BaseModel):
-    """Структурированный дайджест Telegram-каналов."""
-    sources: list[SourceBlock]  # группировка по источникам
-    personal: list[str]         # 2-3 пункта для закрепления в памяти
+    sources: list[SourceBlock]
+    personal: list[str]
 
-
-# ── Model factory ─────────────────────────────────────────────────────────────
 
 def _make_openrouter_model(api_key: str, model_id: str) -> OpenRouterModel:
     return OpenRouterModel(
@@ -52,92 +49,82 @@ def _get_client(api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE)
 
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
+def _render_rule_block(items: list[str], empty_value: str = "- нет") -> str:
+    if not items:
+        return empty_value
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _render_example_block(items: list[str]) -> str:
+    if not items:
+        return ""
+    return "\n\n".join(items)
+
 
 def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = None) -> str:
-    desc = user_data.get("description", "")
-    focus = user_data.get("current_focus", "")
+    cfg = load_personalization()
+    profile_cfg = cfg.get("profile", {})
+    prompt_cfg = cfg.get("prompt", {})
+
+    profile_description = user_data.get("description") or profile_cfg.get("description", "")
+    focus = user_data.get("current_focus", "") or prompt_cfg.get("empty_focus_text", "не задан")
     history = user_data.get("interaction_history", [])[-5:]
     history_text = "\n".join(f"- {h}" for h in history) if history else "нет"
 
-    prev = ""
+    prev = prompt_cfg.get("empty_recent_digest_text", "")
     if recent_digests:
         import re
-        def _strip_html(s: str) -> str:
-            return re.sub(r"<[^>]+>", "", s).strip()
+
+        def _strip_html(text: str) -> str:
+            return re.sub(r"<[^>]+>", "", text).strip()
 
         prev_lines = []
-        for d in recent_digests[-3:]:
-            if d.get("is_error"):
+        for digest in recent_digests[-3:]:
+            if digest.get("is_error"):
                 continue
-            clean = _strip_html(d["digest"])
-            prev_lines.append(f"[{d['date']}]\n{clean[:600]}")
+            clean = _strip_html(digest["digest"])
+            prev_lines.append(f"[{digest['date']}]\n{clean[:600]}")
         if prev_lines:
-            prev = "\nПРЕДЫДУЩИЕ ДАЙДЖЕСТЫ (не повторяй те же инсайты — сравни заголовки и факты):\n" + "\n\n".join(prev_lines) + "\n"
+            prev = "ПРЕДЫДУЩИЕ ДАЙДЖЕСТЫ:\n" + "\n\n".join(prev_lines)
 
-    return f"""Ты — редактор персонального дайджеста AI/tech новостей. Пишешь по-русски, сухо, конкретно.
+    template = prompt_cfg.get("system_template", "").strip()
+    if not template:
+        raise ValueError("Missing prompt.system_template in personalization config")
 
-ПРОФИЛЬ:
-{desc}
+    return template.format(
+        profile_description=profile_description,
+        focus=focus,
+        recent_digest_block=prev,
+        interaction_history=history_text,
+        style_rules=_render_rule_block(prompt_cfg.get("style_rules", [])),
+        ad_filter_rules=_render_rule_block(prompt_cfg.get("ad_filter_rules", [])),
+        hard_rules=_render_rule_block(prompt_cfg.get("hard_rules", [])),
+        source_selection_rules=_render_rule_block(prompt_cfg.get("source_selection_rules", [])),
+        canonical_examples=_render_example_block(prompt_cfg.get("canonical_examples", [])),
+        stop_words=", ".join(f'"{item}"' for item in prompt_cfg.get("stop_words", [])),
+    )
 
-ТЕКУЩИЙ ФОКУС: {focus if focus else "не задан"}
-{prev}
-ПОСЛЕДНИЕ ВЗАИМОДЕЙСТВИЯ:
-{history_text}
-
-ЯЗЫК: Все поля — только на русском. Никакого английского.
-
-ФИЛЬТР РЕКЛАМЫ (по смыслу, не по словам):
-- Некоторые посты — треды: оригинальный пост + комментарии участников. Оцени ВЕСЬ тред целиком.
-- Если тред начинается с рекламного поста, но комментарии содержат реальную дискуссию — возьми инсайт из дискуссии, проигнорируй рекламную часть.
-- Если основная цель поста — продать конкретный сервис/курс без реального инсайта — пропусти полностью.
-
-ЖЁСТКИЕ ПРАВИЛА:
-1. `bullets` = список коротких фактов из поста. Одна строка — один факт. Что вышло/изменилось/появилось. Без воды.
-2. `example` = заполняй ТОЛЬКО если концепт нетривиальный. Простая аналогия или объяснение в одно предложение, как первокурснику.
-3. `personal` = 2-3 пункта, каждый повторяет конкретный инсайт из дайджеста в контексте профиля пользователя — для закрепления в памяти, не новая информация.
-4. `post_date` = дата из поля ДАТА в исходных данных, формат DD.MM.YYYY.
-5. `url` = ТОЛЬКО ссылки из поля ССЫЛКА. Не придумывай.
-
-КОЛИЧЕСТВО ИСТОЧНИКОВ:
-- 4-6 источников — только самые информативные посты.
-- Один источник может давать 1-5 bullets — перечисляй все факты из поста.
-- Малоинформативные посты пропускай полностью.
-
-ЭТАЛОННЫЙ ПРИМЕР (структура и плотность):
-  channel="cryptoEssay" url="https://t.me/cryptoEssay/2932" post_date="01.04.2026"
-  bullets=["ИИ не учится по одному примеру — нужны миллиарды токенов для переобучения", "Агент не помнит между запусками — без внешнего хранилища память обнуляется", "Уточнения в чате не закрепляются — после сессии агент снова ошибётся"]
-  example="Как если бы у тебя каждое утро стиралась память — агент так и работает"
-
-  channel="ai_newz" url="https://t.me/ai_newz/4500" post_date="31.03.2026"
-  bullets=["OpenAI: раунд $122 млрд, оценка $852 млрд — деньги идут на датацентры"]
-  example=""
-
-СТОП-СЛОВА (за их использование — неправильный ответ): "открывает горизонты", "даст преимущество", "критически важен", "удваивай ставку", "не распыляйся", "инвестируй время"."""
-
-
-# ── Digest generation via PydanticAI ─────────────────────────────────────────
 
 def _format_posts(posts: list[dict]) -> str:
     parts = []
     for p in posts:
         link = p.get("link") or f"https://t.me/{p['channel']}"
-        # Parse time to human-readable date for AI
         post_time_raw = p.get("time", "")
         date_str = ""
         if post_time_raw:
             try:
-                from datetime import datetime, timezone
+                from datetime import datetime
+
                 dt = datetime.fromisoformat(post_time_raw)
                 date_str = dt.strftime("%d.%m.%Y %H:%M UTC")
             except Exception:
                 date_str = post_time_raw[:10]
-        prefix = "ТРЕД" if p.get("is_thread") else "ПОСТ"
+        prefix = "РўР Р•Р”" if p.get("is_thread") else "РџРћРЎРў"
         parts.append(
             f"{prefix}: {p['channel']}\n"
-            f"ДАТА: {date_str}\n"
-            f"ССЫЛКА: {link}\n"
-            f"ТЕКСТ:\n{p['text'][:1600]}"
+            f"Р”РђРўРђ: {date_str}\n"
+            f"РЎРЎР«Р›РљРђ: {link}\n"
+            f"РўР•РљРЎРў:\n{p['text'][:1600]}"
         )
     return "\n\n---\n\n".join(parts)
 
@@ -148,10 +135,10 @@ def _to_html_digest(d: DigestResult) -> str:
         date_label = f" [{escape(src.post_date)}]" if src.post_date else ""
         header = f'<a href="{src.url}">{escape(src.channel)}</a>{date_label}'
         lines = [header]
-        for b in src.bullets:
-            lines.append(f"— {escape(b)}")
+        for bullet in src.bullets:
+            lines.append(f"вЂ” {escape(bullet)}")
         if src.example:
-            lines.append(f"💡 {escape(src.example)}")
+            lines.append(f"рџ’Ў {escape(src.example)}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -159,16 +146,16 @@ def _to_html_digest(d: DigestResult) -> str:
 def _to_html_personal(d: DigestResult) -> str | None:
     if not d.personal:
         return None
-    lines = ["<b>Лично тебе:</b>"]
-    for p in d.personal:
-        lines.append(f"• {escape(p)}")
+    lines = ["<b>Р›РёС‡РЅРѕ С‚РµР±Рµ:</b>"]
+    for item in d.personal:
+        lines.append(f"вЂў {escape(item)}")
     return "\n".join(lines)
 
 
 def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: int) -> str:
     return (
-        f"<i>📊 Проверено {posts_checked} постов из {channels_count} каналов, "
-        f"выбрано {sources_selected} источников</i>"
+        f"<i>рџ“Љ РџСЂРѕРІРµСЂРµРЅРѕ {posts_checked} РїРѕСЃС‚РѕРІ РёР· {channels_count} РєР°РЅР°Р»РѕРІ, "
+        f"РІС‹Р±СЂР°РЅРѕ {sources_selected} РёСЃС‚РѕС‡РЅРёРєРѕРІ</i>"
     )
 
 
@@ -178,23 +165,23 @@ async def generate_digest(
     recent_digests: list[dict] | None = None,
 ) -> tuple[str, str | None, str]:
     if not posts:
-        return "Не нашёл новых постов за последние 24 часа.", None, ""
+        return "РќРµ РЅР°С€С‘Р» РЅРѕРІС‹С… РїРѕСЃС‚РѕРІ Р·Р° РїРѕСЃР»РµРґРЅРёРµ 24 С‡Р°СЃР°.", None, ""
 
     model_id = user_data.get("model", "anthropic/claude-3.5-haiku")
     api_key = user_data["openrouter_key"]
     focus = user_data.get("current_focus", "")
-    focus_line = f"\nФОКУС: «{focus}» — приоритизируй посты про это" if focus else ""
+    focus_line = f"\nР¤РћРљРЈРЎ: В«{focus}В» вЂ” РїСЂРёРѕСЂРёС‚РёР·РёСЂСѓР№ РїРѕСЃС‚С‹ РїСЂРѕ СЌС‚Рѕ" if focus else ""
 
     posts_text = _format_posts(posts)
     prompt = (
-        f"Посты из Telegram-каналов:{focus_line}\n\n"
+        f"РџРѕСЃС‚С‹ РёР· Telegram-РєР°РЅР°Р»РѕРІ:{focus_line}\n\n"
         f"{posts_text}\n\n---\n"
-        "Сгруппируй по источникам (4-6 самых информативных постов). "
-        "Для каждого источника:\n"
-        "- url: ТОЧНАЯ ссылка из поля ССЫЛКА (не придумывай)\n"
-        "- post_date: дата из поля ДАТА (формат DD.MM.YYYY)\n"
-        "- bullets: все факты из поста, одна строка — один факт\n"
-        "- example: только если концепт нетривиальный — одно предложение как первокурснику"
+        "РЎРіСЂСѓРїРїРёСЂСѓР№ РїРѕ РёСЃС‚РѕС‡РЅРёРєР°Рј (4-6 СЃР°РјС‹С… РёРЅС„РѕСЂРјР°С‚РёРІРЅС‹С… РїРѕСЃС‚РѕРІ). "
+        "Р”Р»СЏ РєР°Р¶РґРѕРіРѕ РёСЃС‚РѕС‡РЅРёРєР°:\n"
+        "- url: РўРћР§РќРђРЇ СЃСЃС‹Р»РєР° РёР· РїРѕР»СЏ РЎРЎР«Р›РљРђ (РЅРµ РїСЂРёРґСѓРјС‹РІР°Р№)\n"
+        "- post_date: РґР°С‚Р° РёР· РїРѕР»СЏ Р”РђРўРђ (С„РѕСЂРјР°С‚ DD.MM.YYYY)\n"
+        "- bullets: РІСЃРµ С„Р°РєС‚С‹ РёР· РїРѕСЃС‚Р°, РѕРґРЅР° СЃС‚СЂРѕРєР° вЂ” РѕРґРёРЅ С„Р°РєС‚\n"
+        "- example: С‚РѕР»СЊРєРѕ РµСЃР»Рё РєРѕРЅС†РµРїС‚ РЅРµС‚СЂРёРІРёР°Р»СЊРЅС‹Р№ вЂ” РѕРґРЅРѕ РїСЂРµРґР»РѕР¶РµРЅРёРµ РєР°Рє РїРµСЂРІРѕРєСѓСЂСЃРЅРёРєСѓ"
     )
 
     system = build_system_prompt(user_data, recent_digests)
@@ -217,14 +204,12 @@ async def generate_digest(
     except Exception as e:
         logger.error(f"pydantic-ai digest error: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
-        return f"Ошибка генерации дайджеста: {e}", None, ""
+        return f"РћС€РёР±РєР° РіРµРЅРµСЂР°С†РёРё РґР°Р№РґР¶РµСЃС‚Р°: {e}", None, ""
 
-
-# ── Image filtering ───────────────────────────────────────────────────────────
 
 async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> list[bytes]:
-    """Фильтрует изображения, оставляя только тематически подходящие к дайджесту."""
     if not images:
         return []
 
@@ -237,22 +222,27 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
         try:
             resp = await client.chat.completions.create(
                 model=CHEAP_VISION_MODEL,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": (
-                            "Ты — визуальный редактор. Твоя задача: отобрать картинки для дайджеста об AI и технологиях.\n"
-                            f"ТЕКСТ ДАЙДЖЕСТА:\n{context}\n\n"
-                            "Картинка УМЕСТНА, если она:\n"
-                            "1. Иллюстрирует один из пунктов дайджеста.\n"
-                            "2. Является скриншотом нового инструмента/интерфейса.\n"
-                            "3. Это качественное тематическое фото (роботы, код, чипы).\n"
-                            "Картинка НЕУМЕСТНА, если это: реклама, мем не по теме, личное фото, мусорный скриншот.\n\n"
-                            "Ответь только одним словом: YES или NO."
-                        )},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "РўС‹ вЂ” РІРёР·СѓР°Р»СЊРЅС‹Р№ СЂРµРґР°РєС‚РѕСЂ. РўРІРѕСЏ Р·Р°РґР°С‡Р°: РѕС‚РѕР±СЂР°С‚СЊ РєР°СЂС‚РёРЅРєРё РґР»СЏ РґР°Р№РґР¶РµСЃС‚Р° РѕР± AI Рё С‚РµС…РЅРѕР»РѕРіРёСЏС….\n"
+                                    f"РўР•РљРЎРў Р”РђР™Р”Р–Р•РЎРўРђ:\n{context}\n\n"
+                                    "РљР°СЂС‚РёРЅРєР° РЈРњР•РЎРўРќРђ, РµСЃР»Рё РѕРЅР°:\n"
+                                    "1. РР»Р»СЋСЃС‚СЂРёСЂСѓРµС‚ РѕРґРёРЅ РёР· РїСѓРЅРєС‚РѕРІ РґР°Р№РґР¶РµСЃС‚Р°.\n"
+                                    "2. РЇРІР»СЏРµС‚СЃСЏ СЃРєСЂРёРЅС€РѕС‚РѕРј РЅРѕРІРѕРіРѕ РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°/РёРЅС‚РµСЂС„РµР№СЃР°.\n"
+                                    "3. Р­С‚Рѕ РєР°С‡РµСЃС‚РІРµРЅРЅРѕРµ С‚РµРјР°С‚РёС‡РµСЃРєРѕРµ С„РѕС‚Рѕ (СЂРѕР±РѕС‚С‹, РєРѕРґ, С‡РёРїС‹).\n"
+                                    "РљР°СЂС‚РёРЅРєР° РќР•РЈРњР•РЎРўРќРђ, РµСЃР»Рё СЌС‚Рѕ: СЂРµРєР»Р°РјР°, РјРµРј РЅРµ РїРѕ С‚РµРјРµ, Р»РёС‡РЅРѕРµ С„РѕС‚Рѕ, РјСѓСЃРѕСЂРЅС‹Р№ СЃРєСЂРёРЅС€РѕС‚.\n\n"
+                                    "РћС‚РІРµС‚СЊ С‚РѕР»СЊРєРѕ РѕРґРЅРёРј СЃР»РѕРІРѕРј: YES РёР»Рё NO."
+                                ),
+                            },
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                        ],
+                    }
+                ],
                 max_tokens=5,
                 temperature=0.0,
             )
@@ -267,13 +257,11 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
     return approved
 
 
-# ── Free chat ─────────────────────────────────────────────────────────────────
-
 async def chat_response(user_message: str, user_data: dict) -> str:
     client = _get_client(user_data["openrouter_key"])
     model = user_data.get("model", "anthropic/claude-3.5-haiku")
     last_digest = user_data.get("last_digest", "")
-    digest_ctx = f"\nПОСЛЕДНИЙ ДАЙДЖЕСТ:\n{last_digest[:800]}" if last_digest else ""
+    digest_ctx = f"\nРџРћРЎР›Р•Р”РќРР™ Р”РђР™Р”Р–Р•РЎРў:\n{last_digest[:800]}" if last_digest else ""
     system = build_system_prompt(user_data) + digest_ctx
     try:
         resp = await client.chat.completions.create(
@@ -287,4 +275,4 @@ async def chat_response(user_message: str, user_data: dict) -> str:
         return resp.choices[0].message.content
     except Exception as e:
         logger.error(f"chat error: {e}")
-        return f"Ошибка: {e}"
+        return f"РћС€РёР±РєР°: {e}"

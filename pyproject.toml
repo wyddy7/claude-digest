@@ -10,4 +10,5 @@ dependencies = [
     "python-dotenv",
     "pytz",
     "pydantic-ai>=1.74.0",
+    "PyYAML>=6.0",
 ]

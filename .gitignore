@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
+config/personalization.yaml
 data/*.json
 data.json
 digests_history.json
