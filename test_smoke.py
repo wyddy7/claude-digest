@@ -38,14 +38,14 @@ async def test_ai_digest(posts):
         "interaction_history": [],
     }
     sample = posts[:3] if posts else [{"channel": "test", "text": "Test post about AI.", "link": "https://t.me/test/1"}]
-    result = await generate_digest(sample, data)
-    assert not result.startswith("Ошибка"), f"AI error: {result[:200]}"
-    assert len(result) > 50
+    digest_html, personal_html = await generate_digest(sample, data)
+    assert not digest_html.startswith("Ошибка"), f"AI error: {digest_html[:200]}"
+    assert len(digest_html) > 50
     # Check that links are present (pydantic-ai guarantees structured output with URLs)
-    has_links = "t.me" in result or "http" in result
-    print(f"OK ({len(result)} chars, links={'YES' if has_links else 'MISSING'})")
-    print(f"  Preview: {result[:180]}...")
-    return result
+    has_links = "t.me" in digest_html or "http" in digest_html
+    print(f"OK ({len(digest_html)} chars, links={'YES' if has_links else 'MISSING'}, personal={'YES' if personal_html else 'NO'})")
+    print(f"  Preview: {digest_html[:180]}...")
+    return digest_html
 
 
 async def test_filter_images(posts, digest):
