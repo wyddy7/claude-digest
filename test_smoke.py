@@ -1,5 +1,5 @@
 """
-Smoke tests — uv run test_smoke.py
+Smoke tests - uv run test_smoke.py
 """
 import asyncio
 import io
@@ -10,6 +10,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 CHAT_ID = int(os.getenv("CHAT_ID"))
@@ -20,6 +21,7 @@ OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 async def test_scraper():
     print("scraper: cryptoEssay...", end=" ")
     from scraper import scrape_channel
+
     posts = await scrape_channel("cryptoEssay", hours_back=72)
     assert isinstance(posts, list)
     imgs = [p for p in posts if p.get("image_bytes")]
@@ -30,20 +32,22 @@ async def test_scraper():
 async def test_ai_digest(posts):
     print("ai.generate_digest (pydantic-ai)...", end=" ")
     from ai import generate_digest
+
     data = {
-        "description": "Test user",
         "current_focus": "",
         "model": "anthropic/claude-3.5-haiku",
         "openrouter_key": OPENROUTER_KEY,
         "interaction_history": [],
     }
     sample = posts[:3] if posts else [{"channel": "test", "text": "Test post about AI.", "link": "https://t.me/test/1"}]
-    digest_html, personal_html = await generate_digest(sample, data)
-    assert not digest_html.startswith("Ошибка"), f"AI error: {digest_html[:200]}"
+    digest_html, personal_html, stats_html = await generate_digest(sample, data)
+    assert not digest_html.startswith("РћС€РёР±РєР°"), f"AI error: {digest_html[:200]}"
     assert len(digest_html) > 50
-    # Check that links are present (pydantic-ai guarantees structured output with URLs)
     has_links = "t.me" in digest_html or "http" in digest_html
-    print(f"OK ({len(digest_html)} chars, links={'YES' if has_links else 'MISSING'}, personal={'YES' if personal_html else 'NO'})")
+    print(
+        f"OK ({len(digest_html)} chars, links={'YES' if has_links else 'MISSING'}, "
+        f"personal={'YES' if personal_html else 'NO'}, stats={'YES' if stats_html else 'NO'})"
+    )
     print(f"  Preview: {digest_html[:180]}...")
     return digest_html
 
@@ -51,6 +55,7 @@ async def test_ai_digest(posts):
 async def test_filter_images(posts, digest):
     print("ai.filter_images...", end=" ")
     from ai import filter_images
+
     raw = [p["image_bytes"] for p in posts if p.get("image_bytes")]
     if not raw:
         print("SKIP (no images in recent posts)")
@@ -62,12 +67,14 @@ async def test_filter_images(posts, digest):
 
 async def test_bot_startup():
     print("bot startup check...", end=" ")
-    import subprocess, sys
+    import subprocess
     from pathlib import Path
+
     result = subprocess.run(
         [sys.executable, "-c", "import bot; print('imports ok')"],
-        capture_output=True, text=True,
-        cwd=str(Path(__file__).parent)
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).parent),
     )
     assert result.returncode == 0, result.stderr[:200]
     print("OK")
@@ -76,7 +83,9 @@ async def test_bot_startup():
 async def test_send_images(approved_images):
     print("telegram.send_media_group...", end=" ")
     from io import BytesIO
+
     from telegram import Bot, InputMediaPhoto
+
     if not approved_images:
         print("SKIP (no approved images)")
         return
@@ -89,6 +98,7 @@ async def test_send_images(approved_images):
 async def test_telegram():
     print("telegram.send_message...", end=" ")
     from telegram import Bot
+
     bot = Bot(token=BOT_TOKEN)
     await bot.send_message(CHAT_ID, "Smoke test done!")
     print("OK")
@@ -136,11 +146,10 @@ async def main():
     print("=" * 50)
     if errors:
         print(f"ERRORS ({len(errors)}):")
-        for e in errors:
-            print(f"  - {e}")
+        for err in errors:
+            print(f"  - {err}")
         sys.exit(1)
-    else:
-        print("All tests passed!")
+    print("All tests passed!")
 
 
 if __name__ == "__main__":

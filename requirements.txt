@@ -4,3 +4,4 @@ beautifulsoup4
 openai
 python-dotenv
 pytz
+PyYAML
