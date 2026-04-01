@@ -214,7 +214,7 @@ async def do_send_digest(bot, chat_id: int):
     user_data_for_ai = data.copy()
     user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
 
-    digest_html = await generate_digest(posts, user_data_for_ai, recent_digests=recent)
+    digest_html, personal_html = await generate_digest(posts, user_data_for_ai, recent_digests=recent)
 
     # Auto-reset focus after digest if enabled
     if data.get("focus_auto_reset") and data.get("current_focus"):
@@ -232,39 +232,26 @@ async def do_send_digest(bot, chat_id: int):
     # Filter images
     raw_images = [p["image_bytes"] for p in posts if p.get("image_bytes")]
     logger.info(f"Raw images found: {len(raw_images)}")
-    
+
     approved = []
     if raw_images:
-        # Передаем текст дайджеста для более точной фильтрации
         approved = await filter_images(raw_images, digest_html, OPENROUTER_KEY)
         logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
 
+    # Step 1: images FIRST (before text)
     if approved:
-        # Если есть картинки, отправляем их группой. 
-        # Текст дайджеста кладем в caption ПЕРВОЙ картинки (лимит 1024 символа для caption).
-        # Если текст длиннее, отправляем текст отдельно, а картинки - ответом.
-        
-        if len(full_text) <= 1024:
-            media = []
-            for i, img_bytes in enumerate(approved[:10]):
-                media.append(InputMediaPhoto(
-                    BytesIO(img_bytes), 
-                    caption=full_text if i == 0 else None,
-                    parse_mode="HTML" if i == 0 else None
-                ))
-            try:
-                await bot.send_media_group(chat_id, media)
-                logger.info(f"Sent {len(media)} images with caption")
-                return
-            except Exception as e:
-                logger.warning(f"send_media_group with caption failed: {e}")
-        
-    # Fallback: отправляем текст отдельно, картинки (если есть) - ответом
+        media = [InputMediaPhoto(BytesIO(b)) for b in approved[:10]]
+        try:
+            await bot.send_media_group(chat_id, media)
+            logger.info(f"Sent {len(media)} images before digest")
+        except Exception as e:
+            logger.warning(f"send_media_group failed: {e}")
+
+    # Step 2: digest text
     MAX_LEN = 4096
     if len(full_text) <= MAX_LEN:
         chunks = [full_text]
     else:
-        # Разбиваем по абзацам, чтобы не рвать HTML-теги посередине
         paragraphs = full_text.split("\n\n")
         chunks = []
         current = ""
@@ -274,7 +261,6 @@ async def do_send_digest(bot, chat_id: int):
             else:
                 if current:
                     chunks.append(current)
-                # Если один абзац больше лимита — режем по символам
                 while len(para) > MAX_LEN:
                     chunks.append(para[:MAX_LEN])
                     para = para[MAX_LEN:]
@@ -282,25 +268,22 @@ async def do_send_digest(bot, chat_id: int):
         if current:
             chunks.append(current)
 
-    digest_msg = None
     for chunk in chunks:
-        digest_msg = await bot.send_message(
+        await bot.send_message(
             chat_id,
             chunk,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
 
-    if approved:
-        media = [InputMediaPhoto(BytesIO(b)) for b in approved[:10]]
-        try:
-            await bot.send_media_group(
-                chat_id, media,
-                reply_to_message_id=digest_msg.message_id,
-            )
-            logger.info(f"Sent {len(media)} images as reply")
-        except Exception as e:
-            logger.warning(f"send_media_group as reply failed: {e}")
+    # Step 3: personal section as separate message
+    if personal_html:
+        await bot.send_message(
+            chat_id,
+            personal_html,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 async def job_digest(context: ContextTypes.DEFAULT_TYPE):

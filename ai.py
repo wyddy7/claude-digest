@@ -16,14 +16,13 @@ CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 
 # ── Structured output schema ──────────────────────────────────────────────────
 
-class Insight(BaseModel):
-    """Один инсайт из дайджеста."""
-    title: str       # 3-6 слов, название инсайта
-    channel: str     # username канала без @
-    url: Optional[str] = None   # полная ссылка https://t.me/channel/123 — ТОЛЬКО из списка постов
-    post_date: str = ""          # дата поста в формате DD.MM.YYYY — из поля ДАТА
-    what: str        # что это — одно предложение, факт
-    how: str         # конкретная команда/файл/шаг/инструмент — НЕ "изучи X"
+class SourceBlock(BaseModel):
+    """Один источник (пост/тред) с набором инсайтов."""
+    channel: str        # username без @
+    url: str            # ссылка на пост https://t.me/channel/123
+    post_date: str = "" # дата поста DD.MM.YYYY — из поля ДАТА
+    bullets: list[str]  # 1-5 коротких фактов, одна строка каждый
+    example: str = ""   # необязательно: простая аналогия/объяснение как первокурснику
 
     @field_validator("url", mode="before")
     @classmethod
@@ -36,9 +35,8 @@ class Insight(BaseModel):
 
 class DigestResult(BaseModel):
     """Структурированный дайджест Telegram-каналов."""
-    insights: list[Insight]  # максимум инсайтов — каждый факт/фича/цифра — отдельный пункт
-    personal: list[str]      # 2-3 пункта лично для Дании — конкретные, не общие
-    today: str               # ОДНО конкретное действие: глагол + инструмент/команда/файл
+    sources: list[SourceBlock]  # группировка по источникам
+    personal: list[str]         # 2-3 пункта для закрепления в памяти
 
 
 # ── Model factory ─────────────────────────────────────────────────────────────
@@ -93,28 +91,27 @@ def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = Non
 - Некоторые посты — треды: оригинальный пост + комментарии участников. Оцени ВЕСЬ тред целиком.
 - Если тред начинается с рекламного поста, но комментарии содержат реальную дискуссию — возьми инсайт из дискуссии, проигнорируй рекламную часть.
 - Если основная цель поста — продать конкретный сервис/курс без реального инсайта — пропусти полностью.
-- В `how` НИКОГДА не пиши рекламный призыв (ссылку на продукт, "запишись", "получи консультацию").
 
 ЖЁСТКИЕ ПРАВИЛА:
-1. `what` = один факт из поста (что именно появилось/изменилось/вышло).
-2. `how` = конкретная команда, путь к файлу, URL, флаг CLI или название инструмента. Никогда не пиши "изучи X", "используй X для Y" без конкретного шага.
-3. `today` = одно предложение: глагол в повелительном + конкретный инструмент/команда/файл. Пример: "Запусти `uv run test_smoke.py` и проверь логи scraper-а".
-4. `personal` = 2-3 пункта, каждый привязан к конкретному инсайту из этого дайджеста, не к общим советам.
-5. `post_date` = дата из поля ДАТА в исходных данных, формат DD.MM.YYYY.
-6. `url` = ТОЛЬКО ссылки из поля ССЫЛКА. Не придумывай.
+1. `bullets` = список коротких фактов из поста. Одна строка — один факт. Что вышло/изменилось/появилось. Без воды.
+2. `example` = заполняй ТОЛЬКО если концепт нетривиальный. Простая аналогия или объяснение в одно предложение, как первокурснику.
+3. `personal` = 2-3 пункта, каждый повторяет конкретный инсайт из дайджеста в контексте профиля пользователя — для закрепления в памяти, не новая информация.
+4. `post_date` = дата из поля ДАТА в исходных данных, формат DD.MM.YYYY.
+5. `url` = ТОЛЬКО ссылки из поля ССЫЛКА. Не придумывай.
 
-КОЛИЧЕСТВО ИНСАЙТОВ:
-- Минимум 8 инсайтов, максимум — сколько есть полезного в постах.
-- Один пост может давать НЕСКОЛЬКО инсайтов — дроби, если там несколько фактов/фич/цифр.
-- Лучше 15 точных коротких инсайтов, чем 5 раздутых.
+КОЛИЧЕСТВО ИСТОЧНИКОВ:
+- 4-6 источников — только самые информативные посты.
+- Один источник может давать 1-5 bullets — перечисляй все факты из поста.
+- Малоинформативные посты пропускай полностью.
 
-ЭТАЛОННЫЙ ПРИМЕР ХОРОШЕГО ДАЙДЖЕСТА (структура и плотность):
-Допустим, был пост про API провайдеров. Правильная разбивка:
-  title="Грок: штраф за этику" what="Грок берёт $0.05 штраф если запрос улетел в этику" how="Учитывай при бюджетировании — добавь try/except на 402 в клиенте"
-  title="OpenAI Responses API +3% accuracy" what="Responses API даёт +3% к точности по бенчмаркам по сравнению с Chat Completions" how="Замени client.chat.completions.create → client.responses.create"
-  title="Predicted outputs — быстрая отдача длинного текста" what="Predicted outputs позволяет выдавать 10к токенов при генерации лишь малой части — быстрее и чуть дороже" how="Параметр prediction={{type:'content', content:'<existing_text>'}} в запросе"
-  title="Prefill output — пропуск преамбулы" what="Prefill позволяет начать ответ модели с нужного персонажа/текста, минуя вводную часть" how="Передай последнее сообщение с role='assistant' без закрытия у Anthropic"
-  title="Батч + кэш = скидка до 95%" what="Комбинация Batch API и prompt caching даёт до 95% скидки на стоимость запросов" how="batch=True + cache_control: ephemeral на системный промпт в одном запросе"
+ЭТАЛОННЫЙ ПРИМЕР (структура и плотность):
+  channel="cryptoEssay" url="https://t.me/cryptoEssay/2932" post_date="01.04.2026"
+  bullets=["ИИ не учится по одному примеру — нужны миллиарды токенов для переобучения", "Агент не помнит между запусками — без внешнего хранилища память обнуляется", "Уточнения в чате не закрепляются — после сессии агент снова ошибётся"]
+  example="Как если бы у тебя каждое утро стиралась память — агент так и работает"
+
+  channel="ai_newz" url="https://t.me/ai_newz/4500" post_date="31.03.2026"
+  bullets=["OpenAI: раунд $122 млрд, оценка $852 млрд — деньги идут на датацентры"]
+  example=""
 
 СТОП-СЛОВА (за их использование — неправильный ответ): "открывает горизонты", "даст преимущество", "критически важен", "удваивай ставку", "не распыляйся", "инвестируй время"."""
 
@@ -145,21 +142,26 @@ def _format_posts(posts: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _to_html(d: DigestResult) -> str:
-    lines = ["<b>Топ инсайтов:</b>\n"]
-    for ins in d.insights:
-        url = ins.url or f"https://t.me/{ins.channel}"
-        date_label = f" <i>{escape(ins.post_date)}</i>" if ins.post_date else ""
-        lines.append(
-            f'• <b>{escape(ins.title)}</b> <a href="{url}">{escape(ins.channel)}</a>{date_label}\n'
-            f"  {escape(ins.what)}\n"
-            f"  <i>{escape(ins.how)}</i>\n"
-        )
-    if d.personal:
-        lines.append("<b>Лично тебе:</b>")
-        for p in d.personal:
-            lines.append(f"• {escape(p)}")
-    lines.append(f"\n<b>Сделай сегодня:</b>\n{escape(d.today)}")
+def _to_html_digest(d: DigestResult) -> str:
+    blocks = []
+    for src in d.sources:
+        date_label = f" [{escape(src.post_date)}]" if src.post_date else ""
+        header = f'<a href="{src.url}">{escape(src.channel)}</a>{date_label}'
+        lines = [header]
+        for b in src.bullets:
+            lines.append(f"— {escape(b)}")
+        if src.example:
+            lines.append(f"💡 {escape(src.example)}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _to_html_personal(d: DigestResult) -> str | None:
+    if not d.personal:
+        return None
+    lines = ["<b>Лично тебе:</b>"]
+    for p in d.personal:
+        lines.append(f"• {escape(p)}")
     return "\n".join(lines)
 
 
@@ -167,9 +169,9 @@ async def generate_digest(
     posts: list[dict],
     user_data: dict,
     recent_digests: list[dict] | None = None,
-) -> str:
+) -> tuple[str, str | None]:
     if not posts:
-        return "Не нашёл новых постов за последние 24 часа."
+        return "Не нашёл новых постов за последние 24 часа.", None
 
     model_id = user_data.get("model", "anthropic/claude-3.5-haiku")
     api_key = user_data["openrouter_key"]
@@ -180,15 +182,12 @@ async def generate_digest(
     prompt = (
         f"Посты из Telegram-каналов:{focus_line}\n\n"
         f"{posts_text}\n\n---\n"
-        "Выжми МАКСИМУМ инсайтов из постов. "
-        "Каждый отдельный факт, фича, параметр, цифра, инструмент — отдельный инсайт. "
-        "Минимум 8 инсайтов, максимум — сколько есть полезного. "
-        "Дроби крупные посты на несколько инсайтов если там несколько фактов.\n"
-        "Для каждого:\n"
+        "Сгруппируй по источникам (4-6 самых информативных постов). "
+        "Для каждого источника:\n"
         "- url: ТОЧНАЯ ссылка из поля ССЫЛКА (не придумывай)\n"
         "- post_date: дата из поля ДАТА (формат DD.MM.YYYY)\n"
-        "- how: конкретная команда/файл/инструмент, не общий совет\n"
-        "- today: одно действие с конкретным инструментом или командой"
+        "- bullets: все факты из поста, одна строка — один факт\n"
+        "- example: только если концепт нетривиальный — одно предложение как первокурснику"
     )
 
     system = build_system_prompt(user_data, recent_digests)
@@ -202,12 +201,12 @@ async def generate_digest(
             retries=2,
         )
         result = await agent.run(prompt)
-        return _to_html(result.output)
+        return _to_html_digest(result.output), _to_html_personal(result.output)
     except Exception as e:
         logger.error(f"pydantic-ai digest error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return f"Ошибка генерации дайджеста: {e}"
+        return f"Ошибка генерации дайджеста: {e}", None
 
 
 # ── Image filtering ───────────────────────────────────────────────────────────
