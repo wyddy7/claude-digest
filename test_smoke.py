@@ -63,10 +63,11 @@ async def test_filter_images(posts, digest):
 async def test_bot_startup():
     print("bot startup check...", end=" ")
     import subprocess, sys
+    from pathlib import Path
     result = subprocess.run(
         [sys.executable, "-c", "import bot; print('imports ok')"],
         capture_output=True, text=True,
-        cwd="D:/D/Papka/Личное/claude/digest_bot"
+        cwd=str(Path(__file__).parent)
     )
     assert result.returncode == 0, result.stderr[:200]
     print("OK")
