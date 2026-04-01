@@ -199,6 +199,13 @@ try:
 
     check("dockerfile_copies_all_local_imports", len(missing) == 0,
           f"missing: {missing}" if missing else "")
+
+    # config/ directory must be copied so example yaml is available as fallback
+    has_config_copy = any(
+        "config" in p for p in copied_files
+    )
+    check("dockerfile_copies_config_dir", has_config_copy,
+          "add 'COPY config/ config/' to Dockerfile")
 except Exception as e:
     FAIL.append("dockerfile_check")
     print(f"  FAIL  dockerfile_check: {e}")

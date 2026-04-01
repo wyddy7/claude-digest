@@ -8,5 +8,6 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --no-dev --frozen
 
 COPY bot.py scraper.py ai.py personalization.py ./
+COPY config/ config/
 
 CMD ["uv", "run", "bot.py"]
