@@ -15,7 +15,7 @@ winget install astral-sh.uv
 ### 2. Заполни .env
 ```
 BOT_TOKEN=...       # от @BotFather
-CHAT_ID=...         # твой ID от @userinfobot
+CHAT_ID=...         # твой Telegram ID от @userinfobot — также используется как whitelist (бот отвечает только тебе)
 OPENROUTER_KEY=...  # от openrouter.ai
 ```
 
