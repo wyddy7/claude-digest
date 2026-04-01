@@ -47,6 +47,9 @@ jobs:
           asyncio.run(main())
           "
 
+      - name: Offline AI integration tests (no secrets needed)
+        run: uv run python test_ai_integration.py
+
       - name: Full smoke test (requires secrets)
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}

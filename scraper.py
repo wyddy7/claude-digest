@@ -58,7 +58,7 @@ def _group_into_threads(raw: list[dict]) -> list[dict]:
             this_t = datetime.fromisoformat(post["time"])
             gap_h = (this_t - last_t).total_seconds() / 3600
         except Exception:
-            gap_h = 0
+            gap_h = float("inf")  # can't parse time — treat as separate thread
 
         if gap_h <= _THREAD_GAP_HOURS:
             current.append(post)

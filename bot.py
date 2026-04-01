@@ -14,6 +14,7 @@ from telegram import (
     ReplyKeyboardMarkup,
     Update,
 )
+from telegram.error import BadRequest
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -69,7 +70,11 @@ DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
 
 def load() -> dict:
     if DATA_FILE.exists():
-        data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.error(f"Corrupt data.json, resetting to defaults: {e}")
+            data = {}
         data.setdefault("channels", DEFAULT_CHANNELS[:])
         data.setdefault("focus_auto_reset", False)
         # Remove any leaked key from the data file
@@ -91,7 +96,10 @@ def load() -> dict:
 
 
 def save(data: dict):
-    DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    content = json.dumps(data, ensure_ascii=False, indent=2)
+    tmp = DATA_FILE.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(DATA_FILE)
 
 
 def add_history(data: dict, entry: str):
@@ -120,7 +128,10 @@ def append_to_history(digest: str, posts_count: int):
         "posts_count": posts_count,
         "is_error": is_error,
     })
-    HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    content = json.dumps(history, ensure_ascii=False, indent=2)
+    tmp = HISTORY_FILE.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(HISTORY_FILE)
 
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
@@ -186,7 +197,7 @@ async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user and update.effective_user.id != OWNER_ID:
         logger.warning(f"Unauthorized access attempt from user {update.effective_user.id}")
         if update.callback_query:
-            await update.callback_query.answer("⛔ Нет доступа", show_alert=True)
+            await _safe_answer(update.callback_query, "⛔ Нет доступа", show_alert=True)
         elif update.message:
             await update.message.reply_text("⛔ Нет доступа")
         raise ApplicationHandlerStop
@@ -314,6 +325,16 @@ async def job_checkin(context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── Callback helpers ──────────────────────────────────────────────────────────
+
+async def _safe_answer(q, text: str = "", show_alert: bool = False):
+    """Answer a callback query, ignoring 'query too old' Telegram errors."""
+    try:
+        await q.answer(text, show_alert=show_alert)
+    except BadRequest as e:
+        logger.warning(f"callback answer failed (query expired): {e}")
+
+
 # ── Callback handlers ─────────────────────────────────────────────────────────
 
 async def cb_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -322,13 +343,13 @@ async def cb_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load()
     data["model"] = model_id
     save(data)
-    await q.answer(f"✅ {model_id}")
+    await _safe_answer(q, f"✅ {model_id}")
     await q.edit_message_reply_markup(reply_markup=settings_kb(model_id, data["channels"], data.get("focus_auto_reset", False)))
 
 
 async def cb_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    await _safe_answer(q)
     data = load()
     await q.edit_message_text(
         "📡 *Каналы* — нажми ❌ чтобы удалить:",
@@ -344,7 +365,7 @@ async def cb_rmch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ch in data["channels"]:
         data["channels"].remove(ch)
         save(data)
-    await q.answer(f"Удалён: {ch}")
+    await _safe_answer(q, f"Удалён: {ch}")
     await q.edit_message_text(
         "📡 *Каналы*",
         reply_markup=channels_kb(data["channels"]),
@@ -354,14 +375,14 @@ async def cb_rmch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_addch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    await _safe_answer(q)
     context.user_data["state"] = "adding_channel"
     await q.edit_message_text("Введи юзернейм канала без @:\n\n/cancel — отмена")
 
 
 async def cb_back_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    await _safe_answer(q)
     data = load()
     await q.edit_message_text(
         "⚙️ *Настройки*",
@@ -374,7 +395,7 @@ async def cb_hp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     page = int(q.data.split("|", 1)[1])
     history = load_history()
-    await q.answer()
+    await _safe_answer(q)
     await q.edit_message_text(
         f"📚 *История* ({len(history)} дайджестов)",
         reply_markup=history_kb(history, page),
@@ -386,7 +407,7 @@ async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     idx = int(q.data.split("|", 1)[1])
     history = load_history()
-    await q.answer()
+    await _safe_answer(q)
     if idx >= len(history):
         await q.edit_message_text("Запись не найдена.")
         return
@@ -394,7 +415,16 @@ async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     did = d.get("id", idx + 1)
     text = f"📰 <b>Дайджест {d['date']} #{did}</b>\n\n{d['digest']}"
     if len(text) > 4000:
-        text = text[:4000] + "…"
+        # Truncate by paragraphs to avoid splitting mid-HTML-tag
+        header = f"📰 <b>Дайджест {d['date']} #{did}</b>\n\n"
+        body = d["digest"]
+        truncated = header
+        for para in body.split("\n\n"):
+            candidate = truncated + ("\n\n" if truncated != header else "") + para
+            if len(candidate) > 3900:
+                break
+            truncated = candidate
+        text = truncated + "\n\n<i>(сокращено)</i>"
     back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("← Список", callback_data="hp|0")]])
     await q.edit_message_text(
         text, reply_markup=back_kb, parse_mode="HTML", disable_web_page_preview=True
@@ -406,10 +436,10 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = q.data
     data = load()
     if action == "ci_yes":
-        await q.answer("Огонь! 🔥")
+        await _safe_answer(q, "Огонь! 🔥")
         await q.edit_message_text("Огонь! 🔥 Завтра в 13:00.")
     elif action == "ci_no":
-        await q.answer()
+        await _safe_answer(q)
         if data["last_digest"]:
             await q.edit_message_text("Держи дайджест ещё раз:")
             await context.bot.send_message(
@@ -421,7 +451,7 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await q.edit_message_text("Дайджест ещё не запускался.")
     elif action == "ci_talk":
-        await q.answer()
+        await _safe_answer(q)
         context.user_data["state"] = "chat"
         await q.edit_message_text("Пиши, слушаю 👇")
 
@@ -432,7 +462,7 @@ async def cb_toggle_autoreset(update: Update, context: ContextTypes.DEFAULT_TYPE
     data["focus_auto_reset"] = not data.get("focus_auto_reset", False)
     save(data)
     status = "ВКЛ" if data["focus_auto_reset"] else "ВЫКЛ"
-    await q.answer(f"Авто-сброс фокуса: {status}")
+    await _safe_answer(q, f"Авто-сброс фокуса: {status}")
     await q.edit_message_reply_markup(
         reply_markup=settings_kb(data["model"], data["channels"], data["focus_auto_reset"])
     )
@@ -440,7 +470,7 @@ async def cb_toggle_autoreset(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def cb_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    await _safe_answer(q)
     data = load()
     context.user_data["state"] = "editing_profile"
     await q.edit_message_text(

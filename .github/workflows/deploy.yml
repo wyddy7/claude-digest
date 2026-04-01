@@ -24,3 +24,10 @@ jobs:
             git pull origin master
             docker compose up -d --build
             docker image prune -f
+            sleep 5
+            if ! docker compose ps | grep -q "Up"; then
+              echo "ERROR: container failed to start"
+              docker compose logs --tail=50
+              exit 1
+            fi
+            echo "Deploy OK: container is running"
