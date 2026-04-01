@@ -155,7 +155,7 @@ def _to_html_personal(d: DigestResult) -> str | None:
 def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: int) -> str:
     return (
         f"<i>📊 Проверено {posts_checked} постов из {channels_count} каналов, "
-        f"выбрано {sources_selected} источников</i>"
+        f"выбрано {sources_selected} среди них</i>"
     )
 
 
