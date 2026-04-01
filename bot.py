@@ -17,10 +17,12 @@ from telegram import (
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
+OWNER_ID = CHAT_ID  # единственный разрешённый пользователь — берётся из CHAT_ID в .env
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 _DATA_DIR = Path(__file__).parent / "data"
 _DATA_DIR.mkdir(exist_ok=True)
@@ -175,6 +178,18 @@ def channels_kb(channels: list) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("➕ Добавить канал", callback_data="addch")])
     rows.append([InlineKeyboardButton("← Назад", callback_data="back_settings")])
     return InlineKeyboardMarkup(rows)
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user and update.effective_user.id != OWNER_ID:
+        logger.warning(f"Unauthorized access attempt from user {update.effective_user.id}")
+        if update.callback_query:
+            await update.callback_query.answer("⛔ Нет доступа", show_alert=True)
+        elif update.message:
+            await update.message.reply_text("⛔ Нет доступа")
+        raise ApplicationHandlerStop
 
 
 # ── Core ──────────────────────────────────────────────────────────────────────
@@ -549,6 +564,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(TypeHandler(Update, check_owner), group=-1)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_start))
