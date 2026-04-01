@@ -41,7 +41,7 @@ async def test_ai_digest(posts):
     }
     sample = posts[:3] if posts else [{"channel": "test", "text": "Test post about AI.", "link": "https://t.me/test/1"}]
     digest_html, personal_html, stats_html = await generate_digest(sample, data)
-    assert not digest_html.startswith("РћС€РёР±РєР°"), f"AI error: {digest_html[:200]}"
+    assert not digest_html.startswith("Ошибка"), f"AI error: {digest_html[:200]}"
     assert len(digest_html) > 50
     has_links = "t.me" in digest_html or "http" in digest_html
     print(
