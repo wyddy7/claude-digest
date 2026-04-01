@@ -166,6 +166,45 @@ except Exception as e:
     traceback.print_exc()
 
 
+print("\n[7] Dockerfile: all local .py modules are COPYed")
+try:
+    import ast
+    import re as _re
+
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    # Extract filenames from COPY lines
+    copied_files: set[str] = set()
+    for line in dockerfile.splitlines():
+        line = line.strip()
+        if line.startswith("COPY "):
+            parts = line.split()
+            # last token is destination, everything before is source
+            for f in parts[1:-1]:
+                copied_files.add(f)
+
+    # Collect all local .py files referenced as imports across copied app modules
+    local_modules = {f.stem for f in Path(".").glob("*.py") if not f.name.startswith("test_")}
+    app_sources = [f for f in copied_files if f.endswith(".py")]
+
+    missing = []
+    for src in app_sources:
+        src_path = Path(src)
+        if not src_path.exists():
+            continue
+        source = src_path.read_text(encoding="utf-8", errors="replace")
+        for m in _re.finditer(r"^(?:from|import)\s+(\w+)", source, _re.MULTILINE):
+            mod = m.group(1)
+            if mod in local_modules and f"{mod}.py" not in copied_files:
+                missing.append(f"{mod}.py (imported by {src})")
+
+    check("dockerfile_copies_all_local_imports", len(missing) == 0,
+          f"missing: {missing}" if missing else "")
+except Exception as e:
+    FAIL.append("dockerfile_check")
+    print(f"  FAIL  dockerfile_check: {e}")
+    traceback.print_exc()
+
+
 print("\n" + "=" * 50)
 print(f"RESULTS: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
