@@ -165,13 +165,20 @@ def _to_html_personal(d: DigestResult) -> str | None:
     return "\n".join(lines)
 
 
+def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: int) -> str:
+    return (
+        f"<i>📊 Проверено {posts_checked} постов из {channels_count} каналов, "
+        f"выбрано {sources_selected} источников</i>"
+    )
+
+
 async def generate_digest(
     posts: list[dict],
     user_data: dict,
     recent_digests: list[dict] | None = None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, str]:
     if not posts:
-        return "Не нашёл новых постов за последние 24 часа.", None
+        return "Не нашёл новых постов за последние 24 часа.", None, ""
 
     model_id = user_data.get("model", "anthropic/claude-3.5-haiku")
     api_key = user_data["openrouter_key"]
@@ -201,12 +208,17 @@ async def generate_digest(
             retries=2,
         )
         result = await agent.run(prompt)
-        return _to_html_digest(result.output), _to_html_personal(result.output)
+        stats = _to_html_stats(
+            posts_checked=len(posts),
+            channels_count=len({p["channel"] for p in posts}),
+            sources_selected=len(result.output.sources),
+        )
+        return _to_html_digest(result.output), _to_html_personal(result.output), stats
     except Exception as e:
         logger.error(f"pydantic-ai digest error: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return f"Ошибка генерации дайджеста: {e}", None
+        return f"Ошибка генерации дайджеста: {e}", None, ""
 
 
 # ── Image filtering ───────────────────────────────────────────────────────────

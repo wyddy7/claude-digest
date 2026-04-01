@@ -15,7 +15,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="repla
 
 import traceback
 
-from ai import DigestResult, SourceBlock, build_system_prompt, _to_html_digest, _to_html_personal, _format_posts
+from ai import DigestResult, SourceBlock, build_system_prompt, _to_html_digest, _to_html_personal, _to_html_stats, _format_posts
 
 PASS = []
 FAIL = []
@@ -177,9 +177,26 @@ except Exception as e:
     traceback.print_exc()
 
 
-# ── Test 6: _format_posts ─────────────────────────────────────────────────────
+# ── Test 6: _to_html_stats ───────────────────────────────────────────────────
 
-print("\n[6] _format_posts: structure")
+print("\n[6] _to_html_stats: footer rendering")
+try:
+    stats = _to_html_stats(posts_checked=15, channels_count=5, sources_selected=4)
+    check("stats_contains_posts_count", "15" in stats)
+    check("stats_contains_channels_count", "5" in stats)
+    check("stats_contains_sources_count", "4" in stats)
+    check("stats_is_italic", stats.startswith("<i>") and stats.endswith("</i>"))
+    check("stats_has_emoji", "📊" in stats)
+    check("stats_empty_on_zero", _to_html_stats(0, 0, 0) != "")  # always returns a string
+except Exception as e:
+    FAIL.append("_to_html_stats")
+    print(f"  FAIL  _to_html_stats: {e}")
+    traceback.print_exc()
+
+
+# ── Test 7: _format_posts ─────────────────────────────────────────────────────
+
+print("\n[7] _format_posts: structure")
 try:
     posts = [
         {
