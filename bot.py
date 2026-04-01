@@ -234,12 +234,36 @@ async def do_send_digest(bot, chat_id: int):
                 logger.warning(f"send_media_group with caption failed: {e}")
         
     # Fallback: отправляем текст отдельно, картинки (если есть) - ответом
-    digest_msg = await bot.send_message(
-        chat_id,
-        full_text,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
+    MAX_LEN = 4096
+    if len(full_text) <= MAX_LEN:
+        chunks = [full_text]
+    else:
+        # Разбиваем по абзацам, чтобы не рвать HTML-теги посередине
+        paragraphs = full_text.split("\n\n")
+        chunks = []
+        current = ""
+        for para in paragraphs:
+            if len(current) + len(para) + 2 <= MAX_LEN:
+                current = current + ("\n\n" if current else "") + para
+            else:
+                if current:
+                    chunks.append(current)
+                # Если один абзац больше лимита — режем по символам
+                while len(para) > MAX_LEN:
+                    chunks.append(para[:MAX_LEN])
+                    para = para[MAX_LEN:]
+                current = para
+        if current:
+            chunks.append(current)
+
+    digest_msg = None
+    for chunk in chunks:
+        digest_msg = await bot.send_message(
+            chat_id,
+            chunk,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
     if approved:
         media = [InputMediaPhoto(BytesIO(b)) for b in approved[:10]]
