@@ -82,7 +82,7 @@ try:
     check("digest_contains_example", "Example 0" in html_digest)
     check("digest_no_example_for_empty", "Example 1" not in html_digest)
     check("personal_not_none", html_personal is not None)
-    check("personal_header", "<b>Р›РёС‡РЅРѕ С‚РµР±Рµ:</b>" in html_personal)
+    check("personal_header", "<b>Лично тебе:</b>" in html_personal)
     check("personal_bullet", "Personal item 1" in html_personal)
     dr_empty = DigestResult(sources=[], personal=[])
     check("personal_none_when_empty", _to_html_personal(dr_empty) is None)
@@ -114,9 +114,9 @@ try:
     check("html_stripped_from_prev_digests", not has_html_tags)
     check("plain_text_survives_strip", "Insight" in prev_section)
     check("plain_text_command_survives", "pip install x" in prev_section)
-    check("contains_style_rules", "СТИЛЬ:" in prompt)
-    check("contains_source_selection", "ОТБОР ИСТОЧНИКОВ:" in prompt)
-    check("contains_stop_words", "СТОП-СЛОВА:" in prompt)
+    check("contains_style_rules", any(s in prompt for s in ("STYLE RULES:", "СТИЛЬ:")))
+    check("contains_source_selection", any(s in prompt for s in ("SOURCE SELECTION:", "ОТБОР ИСТОЧНИКОВ:")))
+    check("contains_stop_words", any(s in prompt for s in ("STOP WORDS:", "СТОП-СЛОВА:")))
 except Exception as e:
     FAIL.append("build_system_prompt")
     print(f"  FAIL  build_system_prompt: {e}")
@@ -155,8 +155,8 @@ try:
         },
     ]
     formatted = _format_posts(posts)
-    check("format_posts_post_label", "РџРћРЎРў: test_ch" in formatted)
-    check("format_posts_thread_label", "РўР Р•Р”: another_ch" in formatted)
+    check("format_posts_post_label", "ПОСТ: test_ch" in formatted)
+    check("format_posts_thread_label", "ТРЕД: another_ch" in formatted)
     check("format_posts_link_field", "https://t.me/test_ch/42" in formatted)
     check("format_posts_separator", "---" in formatted)
     check("format_posts_date_format", "31.03.2026" in formatted)
