@@ -214,7 +214,7 @@ async def do_send_digest(bot, chat_id: int):
     user_data_for_ai = data.copy()
     user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
 
-    digest_html, personal_html = await generate_digest(posts, user_data_for_ai, recent_digests=recent)
+    digest_html, personal_html, stats_html = await generate_digest(posts, user_data_for_ai, recent_digests=recent)
 
     # Auto-reset focus after digest if enabled
     if data.get("focus_auto_reset") and data.get("current_focus"):
@@ -276,11 +276,12 @@ async def do_send_digest(bot, chat_id: int):
             disable_web_page_preview=True,
         )
 
-    # Step 3: personal section as separate message
-    if personal_html:
+    # Step 3: personal section + stats footer as separate message
+    personal_parts = [p for p in [personal_html, stats_html] if p]
+    if personal_parts:
         await bot.send_message(
             chat_id,
-            personal_html,
+            "\n\n".join(personal_parts),
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
