@@ -80,6 +80,55 @@ async def test_bot_startup():
     print("OK")
 
 
+async def test_scheduler_startup():
+    print("scheduler startup check...", end=" ")
+    import queue
+    import subprocess
+    import threading
+    import time
+    from pathlib import Path
+
+    proc = subprocess.Popen(
+        [sys.executable, "scheduler.py"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=str(Path(__file__).parent),
+    )
+    output_q: queue.Queue = queue.Queue()
+
+    def _reader(stream, q):
+        for line in stream:
+            q.put(line)
+        q.put(None)
+
+    t = threading.Thread(target=_reader, args=(proc.stdout, output_q), daemon=True)
+    t.start()
+
+    started = False
+    deadline = time.monotonic() + 10
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                line = output_q.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if line is None:
+                break
+            if "Scheduler started" in line:
+                started = True
+                break
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+    assert started, "Scheduler did not emit 'Scheduler started' within 10s"
+    print("OK")
+
+
 async def test_send_images(approved_images):
     print("telegram.send_media_group...", end=" ")
     from io import BytesIO
@@ -115,6 +164,7 @@ async def main():
         ("scraper", lambda: test_scraper()),
         ("telegram", lambda: test_telegram()),
         ("bot_startup", lambda: test_bot_startup()),
+        ("scheduler_startup", lambda: test_scheduler_startup()),
     ]:
         try:
             if label == "scraper":
