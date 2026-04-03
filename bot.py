@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime, time
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -29,7 +29,7 @@ from telegram.ext import (
 
 from ai import chat_response, filter_images, generate_digest
 from personalization import get_profile_description
-from scraper import scrape_all
+from scraper import scrape_channel
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -199,39 +199,58 @@ async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raise ApplicationHandlerStop
 
 
-async def do_send_digest(bot, chat_id: int):
+async def do_send_digest(bot, chat_id: int, status_msg=None):
+    async def _update(text: str):
+        nonlocal status_msg
+        if status_msg is None:
+            status_msg = await bot.send_message(chat_id, text)
+        else:
+            try:
+                await status_msg.edit_text(text)
+            except Exception:
+                pass
+
     data = load()
-    posts = await scrape_all(data["channels"])
+    channels = data["channels"]
+
+    all_posts = []
+    for i, ch in enumerate(channels):
+        await _update(f"⏳ Читаю каналы... {ch} ({i + 1}/{len(channels)})")
+        posts = await scrape_channel(ch)
+        all_posts.extend(posts)
+
+    await _update(f"🤖 Формулирую дайджест... ({len(all_posts)} постов)")
     recent = load_history()[-3:]
 
     user_data_for_ai = data.copy()
     user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
 
     digest_html, personal_html, stats_html = await generate_digest(
-        posts,
+        all_posts,
         user_data_for_ai,
         recent_digests=recent,
     )
+
+    raw_images = [post["image_bytes"] for post in all_posts if post.get("image_bytes")]
+    approved = []
+    if raw_images:
+        await _update(f"🖼 Проверяю картинки... ({len(raw_images)} шт)")
+        approved = await filter_images(raw_images, digest_html, OPENROUTER_KEY)
+        logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
+
+    await _update("✅ Готово")
 
     if data.get("focus_auto_reset") and data.get("current_focus"):
         data["current_focus"] = ""
 
     data["last_digest"] = digest_html
     data["last_digest_time"] = datetime.now().isoformat()
-    add_history(data, f"Дайджест ({len(posts)} постов)")
+    add_history(data, f"Дайджест ({len(all_posts)} постов)")
     save(data)
-    append_to_history(digest_html, len(posts))
+    append_to_history(digest_html, len(all_posts))
 
     date_str = datetime.now(MOSCOW).strftime("%d.%m.%Y")
     full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
-
-    raw_images = [post["image_bytes"] for post in posts if post.get("image_bytes")]
-    logger.info(f"Raw images found: {len(raw_images)}")
-
-    approved = []
-    if raw_images:
-        approved = await filter_images(raw_images, digest_html, OPENROUTER_KEY)
-        logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
 
     if approved:
         media = [InputMediaPhoto(BytesIO(image)) for image in approved[:10]]
@@ -278,29 +297,6 @@ async def do_send_digest(bot, chat_id: int):
             disable_web_page_preview=True,
         )
 
-
-async def job_digest(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(CHAT_ID, "⏳ Собираю дайджест...")
-    await do_send_digest(context.bot, CHAT_ID)
-
-
-async def job_checkin(context: ContextTypes.DEFAULT_TYPE):
-    data = load()
-    focus = data.get("current_focus", "")
-    focus_line = f" Как дела с *{escape_markdown(focus, version=1)}*?" if focus else ""
-    kb = InlineKeyboardMarkup(
-        [[
-            InlineKeyboardButton("✅ Прочитал", callback_data="ci_yes"),
-            InlineKeyboardButton("❌ Не успел", callback_data="ci_no"),
-            InlineKeyboardButton("💬 Поговорить", callback_data="ci_talk"),
-        ]]
-    )
-    await context.bot.send_message(
-        CHAT_ID,
-        f"Эй, успел глянуть дайджест?{focus_line}",
-        reply_markup=kb,
-        parse_mode="Markdown",
-    )
 
 
 async def _safe_answer(q, text: str = "", show_alert: bool = False):
@@ -468,8 +464,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("state", None)
 
     if text == "📰 Дайджест":
-        await update.message.reply_text("⏳ Читаю каналы...", reply_markup=main_kb(focus))
-        await do_send_digest(context.bot, update.effective_chat.id)
+        status = await update.message.reply_text("⏳ Читаю каналы...", reply_markup=main_kb(focus))
+        await do_send_digest(context.bot, update.effective_chat.id, status_msg=status)
         return
 
     if text == "📚 История":
@@ -553,6 +549,49 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply, reply_markup=main_kb(focus))
 
 
+async def cmd_in(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("Использование: /in <минуты>\nПример: /in 2")
+        return
+    minutes = int(args[0])
+    if minutes < 1 or minutes > 60:
+        await update.message.reply_text("Укажи от 1 до 60 минут.")
+        return
+    fire_at = datetime.now(MOSCOW) + timedelta(minutes=minutes)
+    time_str = fire_at.strftime("%H:%M МСК")
+    target_chat_id = update.effective_chat.id
+
+    async def _job(ctx: ContextTypes.DEFAULT_TYPE):
+        await do_send_digest(ctx.bot, target_chat_id)
+
+    context.job_queue.run_once(_job, when=minutes * 60, name=f"test_digest_{minutes}m")
+    await update.message.reply_text(f"⏰ Дайджест запланирован через {minutes} мин (в {time_str})")
+
+
+async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now(MOSCOW)
+
+    def next_time(hour: int, minute: int) -> datetime:
+        t = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if t <= now:
+            t += timedelta(days=1)
+        return t
+
+    def fmt(t: datetime) -> str:
+        diff = t - now
+        total_min = int(diff.total_seconds() // 60)
+        h, m = divmod(total_min, 60)
+        label = "сегодня" if t.date() == now.date() else "завтра"
+        when = f"через {h}ч {m}м" if h else f"через {m}м"
+        return f"{label} в {t.strftime('%H:%M')} МСК ({when})"
+
+    await update.message.reply_text(
+        f"📅 Дайджест: {fmt(next_time(13, 0))}\n"
+        f"💬 Чекин: {fmt(next_time(18, 0))}"
+    )
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -560,6 +599,8 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_start))
+    app.add_handler(CommandHandler("in", cmd_in))
+    app.add_handler(CommandHandler("next", cmd_next))
 
     app.add_handler(CallbackQueryHandler(cb_model, pattern=r"^model\|"))
     app.add_handler(CallbackQueryHandler(cb_channels, pattern="^channels$"))
@@ -573,10 +614,6 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_edit_profile, pattern="^edit_profile$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    jq = app.job_queue
-    jq.run_daily(job_digest, time=time(13, 0, tzinfo=MOSCOW), name="daily_digest")
-    jq.run_daily(job_checkin, time=time(18, 0, tzinfo=MOSCOW), name="daily_checkin")
 
     logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)

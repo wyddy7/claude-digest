@@ -7,3 +7,13 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+
+  scheduler:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    command: ["uv", "run", "scheduler.py"]

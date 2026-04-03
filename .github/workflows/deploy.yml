@@ -25,9 +25,10 @@ jobs:
             docker compose up -d --build
             docker image prune -f
             sleep 5
-            if ! docker compose ps | grep -q "Up"; then
-              echo "ERROR: container failed to start"
+            RUNNING=$(docker compose ps --status running --services | wc -l)
+            if [ "$RUNNING" -lt 2 ]; then
+              echo "ERROR: expected 2 services running, got $RUNNING"
               docker compose logs --tail=50
               exit 1
             fi
-            echo "Deploy OK: container is running"
+            echo "Deploy OK: $RUNNING services running"
