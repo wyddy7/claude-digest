@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
+AD_FILTER_MODEL = "deepseek/deepseek-chat"
 
 
 class SourceBlock(BaseModel):
@@ -36,6 +37,15 @@ class SourceBlock(BaseModel):
 class DigestResult(BaseModel):
     sources: list[SourceBlock]
     personal: list[str]
+
+
+class PostAdLabel(BaseModel):
+    index: int
+    is_ad: bool
+
+
+class AdBatchResult(BaseModel):
+    posts: list[PostAdLabel]
 
 
 def _make_openrouter_model(api_key: str, model_id: str) -> OpenRouterModel:
@@ -157,6 +167,60 @@ def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: in
         f"<i>📊 Проверено {posts_checked} постов из {channels_count} каналов, "
         f"выбрано {sources_selected} среди них</i>"
     )
+
+
+async def filter_ads(posts: list[dict], api_key: str, batch_size: int = 3) -> list[dict]:
+    """Pre-filter posts: drop pure ads, keep posts with real signal even if they mention products."""
+    if not posts:
+        return []
+
+    model = _make_openrouter_model(api_key, AD_FILTER_MODEL)
+    agent = Agent(
+        model,
+        output_type=PromptedOutput(AdBatchResult),
+        system_prompt=(
+            "Ты — строгий редактор технического дайджеста. "
+            "Твоя задача: определить, является ли пост чистой рекламой.\n\n"
+            "РЕКЛАМА (is_ad=true): пост продаёт курс, сервис или событие БЕЗ реального контента — "
+            "только призыв купить/зарегистрироваться/подписаться, без конкретных фактов или объяснений.\n\n"
+            "НЕ РЕКЛАМА (is_ad=false): пост содержит реальные инсайты, факты, анализ или примеры, "
+            "даже если упоминает конкретный продукт или компанию. "
+            "Фраза 'не реклама' в тексте — подсказка, но не решающий фактор, смотри на содержание.\n\n"
+            "ГРАНИЧНЫЕ СЛУЧАИ — НЕ РЕКЛАМА:\n"
+            "- Событие/вебинар с конкретной программой, спикерами или разбором темы → НЕ реклама\n"
+            "- Продуктовый апдейт с описанием новых фич или архитектурных решений → НЕ реклама\n"
+            "- Пост упоминает продукт, но основную часть занимает анализ, список фактов или пример → НЕ реклама\n\n"
+            "РЕКЛАМА — только если: нет фактического контента, только CTA или восклицания типа "
+            "'купи', 'зарегистрируйся', 'успей до конца недели', 'скидка 50%'."
+        ),
+        retries=1,
+    )
+
+    kept: list[dict] = []
+    for batch_start in range(0, len(posts), batch_size):
+        batch = posts[batch_start : batch_start + batch_size]
+        lines = []
+        for i, p in enumerate(batch):
+            lines.append(f"[{i}] КАНАЛ: {p['channel']}\nТЕКСТ:\n{p['text'][:800]}")
+        prompt = (
+            "Оцени каждый пост: is_ad=true если чистая реклама без сигнала, is_ad=false если есть реальный контент.\n\n"
+            + "\n\n---\n\n".join(lines)
+        )
+        try:
+            result = await agent.run(prompt)
+            labels = {lbl.index: lbl.is_ad for lbl in result.output.posts}
+            for i, post in enumerate(batch):
+                is_ad = labels.get(i, False)
+                if not is_ad:
+                    kept.append(post)
+                else:
+                    logger.info(f"Ad-filter dropped: [{post['channel']}] {post['text'][:60]!r}")
+        except Exception as e:
+            logger.warning(f"Ad-filter batch failed, keeping all: {e}")
+            kept.extend(batch)
+
+    logger.info(f"Ad-filter: {len(posts)} posts → {len(kept)} kept")
+    return kept
 
 
 async def generate_digest(

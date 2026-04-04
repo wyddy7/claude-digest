@@ -55,9 +55,11 @@ async def run_checkin():
 
 
 async def _run():
+    from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
+
     scheduler = AsyncIOScheduler(timezone=MOSCOW)
-    scheduler.add_job(run_digest, "cron", hour=13, minute=0, misfire_grace_time=300, name="daily_digest")
-    scheduler.add_job(run_checkin, "cron", hour=18, minute=0, misfire_grace_time=300, name="daily_checkin")
+    scheduler.add_job(run_digest, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")
+    scheduler.add_job(run_checkin, "cron", hour=CHECKIN_HOUR, minute=CHECKIN_MINUTE, misfire_grace_time=300, name="daily_checkin")
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -72,7 +74,7 @@ async def _run():
     try:
         scheduler.start()
         scheduler_running = True
-        logger.info("Scheduler started — digest 13:00 MSK, checkin 18:00 MSK")
+        logger.info(f"Scheduler started — digest {DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d} MSK, checkin {CHECKIN_HOUR:02d}:{CHECKIN_MINUTE:02d} MSK")
         await stop_event.wait()
     finally:
         if scheduler_running:

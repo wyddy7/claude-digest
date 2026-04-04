@@ -102,6 +102,18 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                 logger.warning(f"[{channel}] HTTP {resp.status_code}")
                 return []
 
+            # Detect redirect away from /s/ — group chats and private channels
+            # don't have a public post stream; scraping will yield nothing.
+            final_url = str(resp.url)
+            final_path = resp.url.path.rstrip("/")
+            if final_path != f"/s/{channel}":
+                logger.warning(
+                    f"[{channel}] redirected to {final_url} — "
+                    "channel may not support public scraping (group chat or private). "
+                    "Consider removing it from the channel list."
+                )
+                return []
+
             soup = BeautifulSoup(resp.text, "html.parser")
             raw: list[dict] = []
             cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
@@ -115,7 +127,10 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                     continue
 
                 post_time = None
-                time_tag = msg.find("time")
+                # Look for the timestamp inside the message_date link to avoid
+                # picking up video-duration <time> tags (which have no datetime).
+                date_link = msg.find("a", class_="tgme_widget_message_date")
+                time_tag = date_link.find("time", attrs={"datetime": True}) if date_link else None
                 if time_tag:
                     dt_str = time_tag.get("datetime", "")
                     try:
@@ -146,7 +161,7 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                     except Exception as e:
                         logger.warning(f"[{channel}] image fetch error: {e}")
 
-                raw.append({
+                post = {
                     "channel": channel,
                     "author": author,
                     "text": text[:1200],
@@ -154,7 +169,11 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                     "image_url": image_url,
                     "image_bytes": image_bytes,
                     "time": post_time.isoformat(),
-                })
+                }
+                raw.append(post)
+                date_label = post_time.strftime("%d.%m %H:%M")
+                snippet = text[:90].replace("\n", " ")
+                logger.debug(f"[{channel}] +post {date_label} len={len(text)}: {snippet!r}")
 
     except Exception as e:
         logger.error(f"[{channel}] scrape error: {e}")
