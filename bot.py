@@ -241,7 +241,7 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
         recent_digests=recent,
     )
 
-    raw_images = [post["image_bytes"] for post in all_posts if post.get("image_bytes")]
+    raw_images = [img for post in all_posts for img in (post.get("image_bytes") or [])]
     approved = []
     if raw_images:
         await _update(f"🖼 Проверяю картинки... ({len(raw_images)} шт)")

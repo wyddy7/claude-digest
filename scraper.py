@@ -14,15 +14,15 @@ HEADERS = {
 _THREAD_GAP_HOURS = 3
 
 
-def _extract_image_url(msg) -> str:
-    for tag in msg.find_all(True, style=re.compile("background-image")):
-        classes = tag.get("class", [])
-        if "tgme_widget_message_photo_wrap" in classes:
-            style = tag.get("style", "")
-            m = re.search(r"background-image:url\(['\"]?([^'\")\s]+)['\"]?\)", style)
-            if m:
-                return m.group(1)
-    return ""
+def _extract_image_urls(msg) -> list[str]:
+    """Return all photo URLs from a message (albums can have multiple photo_wraps)."""
+    urls = []
+    for tag in msg.find_all(True, class_=re.compile(r"tgme_widget_message_photo_wrap")):
+        style = tag.get("style", "")
+        m = re.search(r"background-image:url\(['\"]?([^'\")\s]+)['\"]?\)", style)
+        if m:
+            urls.append(m.group(1))
+    return urls
 
 
 def _extract_author(msg) -> str:
@@ -150,14 +150,14 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
 
                 author = _extract_author(msg)
 
-                image_url = _extract_image_url(msg)
-                image_bytes = None
-                if image_url:
+                image_urls = _extract_image_urls(msg)
+                image_bytes: list[bytes] = []
+                for image_url in image_urls:
                     try:
                         img_resp = await client.get(image_url)
                         ct = img_resp.headers.get("content-type", "")
                         if img_resp.status_code == 200 and "image" in ct and len(img_resp.content) > 500:
-                            image_bytes = img_resp.content
+                            image_bytes.append(img_resp.content)
                     except Exception as e:
                         logger.warning(f"[{channel}] image fetch error: {e}")
 
@@ -166,7 +166,6 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                     "author": author,
                     "text": text[:1200],
                     "link": link,
-                    "image_url": image_url,
                     "image_bytes": image_bytes,
                     "time": post_time.isoformat(),
                 }
@@ -180,9 +179,9 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
         return []
 
     posts = _group_into_threads(raw)
-    imgs = sum(1 for p in posts if p.get("image_bytes"))
+    imgs = sum(len(p.get("image_bytes") or []) for p in posts)
     threads = sum(1 for p in posts if p.get("is_thread"))
-    logger.info(f"[{channel}] {len(raw)} msgs → {len(posts)} posts ({threads} threads, {imgs} with images)")
+    logger.info(f"[{channel}] {len(raw)} msgs → {len(posts)} posts ({threads} threads, {imgs} images)")
     return posts
 
 
