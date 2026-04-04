@@ -27,7 +27,7 @@ from telegram.ext import (
     filters,
 )
 
-from ai import chat_response, filter_images, generate_digest
+from ai import chat_response, filter_ads, filter_images, generate_digest
 from personalization import get_profile_description
 from scraper import scrape_channel
 
@@ -44,6 +44,10 @@ _DATA_DIR.mkdir(exist_ok=True)
 DATA_FILE = _DATA_DIR / "data.json"
 HISTORY_FILE = _DATA_DIR / "digests_history.json"
 MOSCOW = pytz.timezone("Europe/Moscow")
+
+# Schedule — single source of truth for both bot.py and scheduler.py
+DIGEST_HOUR, DIGEST_MINUTE = 13, 0
+CHECKIN_HOUR, CHECKIN_MINUTE = 18, 0
 
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 
@@ -218,6 +222,12 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
         await _update(f"⏳ Читаю каналы... {ch} ({i + 1}/{len(channels)})")
         posts = await scrape_channel(ch)
         all_posts.extend(posts)
+
+    await _update(f"🔍 Фильтрую рекламу... ({len(all_posts)} постов)")
+    try:
+        all_posts = await filter_ads(all_posts, OPENROUTER_KEY)
+    except Exception as e:
+        logger.warning(f"filter_ads failed, proceeding with all posts: {e}")
 
     await _update(f"🤖 Формулирую дайджест... ({len(all_posts)} постов)")
     recent = load_history()[-3:]
@@ -410,7 +420,7 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load()
     if action == "ci_yes":
         await _safe_answer(q, "Огонь! 🔥")
-        await q.edit_message_text("Огонь! 🔥 Завтра в 13:00.")
+        await q.edit_message_text(f"Огонь! 🔥 Завтра в {DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d}.")
     elif action == "ci_no":
         await _safe_answer(q)
         if data["last_digest"]:
@@ -587,8 +597,8 @@ async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return f"{label} в {t.strftime('%H:%M')} МСК ({when})"
 
     await update.message.reply_text(
-        f"📅 Дайджест: {fmt(next_time(13, 0))}\n"
-        f"💬 Чекин: {fmt(next_time(18, 0))}"
+        f"📅 Дайджест: {fmt(next_time(DIGEST_HOUR, DIGEST_MINUTE))}\n"
+        f"💬 Чекин: {fmt(next_time(CHECKIN_HOUR, CHECKIN_MINUTE))}"
     )
 
 
@@ -599,6 +609,7 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("in", cmd_in))
     app.add_handler(CommandHandler("next", cmd_next))
 
@@ -619,12 +630,32 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "*Команды*\n\n"
+        "/help — это сообщение\n"
+        "/next — когда следующий дайджест и чекин\n"
+        "/in `<минуты>` — запустить дайджест через N минут (1–60)\n"
+        "/menu — показать главное меню\n\n"
+        "*Кнопки*\n\n"
+        "📰 *Дайджест* — запустить сейчас\n"
+        "📚 *История* — предыдущие дайджесты\n"
+        "👤 *Профиль* — профиль, модель, каналы\n"
+        "⚙️ *Настройки* — выбор модели, управление каналами, авто-сброс фокуса\n"
+        "🎯 *Фокус* — задать приоритет для следующего дайджеста\n\n"
+        "*Расписание*\n\n"
+        f"• {DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d} МСК — автодайджест\n"
+        f"• {CHECKIN_HOUR:02d}:{CHECKIN_MINUTE:02d} МСК — чекин",
+        parse_mode="Markdown",
+    )
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load()
     await update.message.reply_text(
         "Привет! Твой персональный дайджест-бот 🤖\n\n"
-        "• *13:00* — дайджест из каналов\n"
-        "• *18:00* — чекин\n\n"
+        f"• *{DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d}* — дайджест из каналов\n"
+        f"• *{CHECKIN_HOUR:02d}:{CHECKIN_MINUTE:02d}* — чекин\n\n"
         "Кнопки снизу 👇",
         reply_markup=main_kb(data.get("current_focus", "")),
         parse_mode="Markdown",

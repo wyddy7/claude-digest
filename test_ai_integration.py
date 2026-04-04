@@ -11,7 +11,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from ai import (
+    AdBatchResult,
     DigestResult,
+    PostAdLabel,
     SourceBlock,
     _format_posts,
     _to_html_digest,
@@ -209,6 +211,31 @@ try:
 except Exception as e:
     FAIL.append("dockerfile_check")
     print(f"  FAIL  dockerfile_check: {e}")
+    traceback.print_exc()
+
+
+print("\n[8] AdBatchResult / PostAdLabel schema")
+try:
+    lbl_ad = PostAdLabel(index=0, is_ad=True)
+    lbl_ok = PostAdLabel(index=1, is_ad=False)
+    batch = AdBatchResult(posts=[lbl_ad, lbl_ok])
+    check("postadlabel_is_ad_true", lbl_ad.is_ad is True)
+    check("postadlabel_is_ad_false", lbl_ok.is_ad is False)
+    check("adbatchresult_two_posts", len(batch.posts) == 2)
+    check("adbatchresult_index_preserved", batch.posts[0].index == 0 and batch.posts[1].index == 1)
+
+    # Simulate filter_ads keep/drop logic (mirrors the real function)
+    posts = [
+        {"channel": "ch1", "text": "Реклама курса за 10к"},
+        {"channel": "ch2", "text": "Разбор архитектуры AI-native компании с деталями"},
+    ]
+    labels = {lbl.index: lbl.is_ad for lbl in batch.posts}
+    kept = [p for i, p in enumerate(posts) if not labels.get(i, False)]
+    check("filter_logic_drops_ad", len(kept) == 1)
+    check("filter_logic_keeps_signal", kept[0]["channel"] == "ch2")
+except Exception as e:
+    FAIL.append("ad_filter_schema")
+    print(f"  FAIL  ad_filter_schema: {e}")
     traceback.print_exc()
 
 
