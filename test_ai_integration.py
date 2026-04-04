@@ -10,6 +10,9 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+from bs4 import BeautifulSoup
+from scraper import _extract_image_urls
+
 from ai import (
     AdBatchResult,
     DigestResult,
@@ -236,6 +239,43 @@ try:
 except Exception as e:
     FAIL.append("ad_filter_schema")
     print(f"  FAIL  ad_filter_schema: {e}")
+    traceback.print_exc()
+
+
+print("\n[9] _extract_image_urls: multi-photo album")
+try:
+    # Simulate a message with two photo_wraps (Telegram album)
+    html = """
+    <div class="tgme_widget_message">
+      <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn.example.com/photo1.jpg')"></a>
+      <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn.example.com/photo2.jpg')"></a>
+      <i class="emoji" style="background-image:url('https://telegram.org/img/emoji/1.png')"></i>
+    </div>
+    """
+    msg = BeautifulSoup(html, "html.parser").find("div", class_="tgme_widget_message")
+    urls = _extract_image_urls(msg)
+    check("multi_photo_returns_two", len(urls) == 2)
+    check("multi_photo_url_0_correct", urls[0] == "https://cdn.example.com/photo1.jpg")
+    check("multi_photo_url_1_correct", urls[1] == "https://cdn.example.com/photo2.jpg")
+
+    # Single photo
+    html_single = """
+    <div class="tgme_widget_message">
+      <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn.example.com/only.jpg')"></a>
+      <i class="emoji" style="background-image:url('https://telegram.org/img/emoji/2.png')"></i>
+    </div>
+    """
+    msg_single = BeautifulSoup(html_single, "html.parser").find("div", class_="tgme_widget_message")
+    urls_single = _extract_image_urls(msg_single)
+    check("single_photo_returns_one", len(urls_single) == 1)
+
+    # No photo — emoji only
+    html_none = """<div class="tgme_widget_message"><i class="emoji" style="background-image:url('e.png')"></i></div>"""
+    msg_none = BeautifulSoup(html_none, "html.parser").find("div", class_="tgme_widget_message")
+    check("no_photo_returns_empty", _extract_image_urls(msg_none) == [])
+except Exception as e:
+    FAIL.append("_extract_image_urls")
+    print(f"  FAIL  _extract_image_urls: {e}")
     traceback.print_exc()
 
 
