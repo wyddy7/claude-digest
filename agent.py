@@ -11,65 +11,28 @@ Entry points:
 """
 
 import asyncio
-import json
 import logging
 import os
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any
 
-import pytz
 from langchain_core.tools import tool
 from deepagents import create_deep_agent
 
-from ai import build_system_prompt, filter_ads, generate_digest, filter_images
+import db
+from ai import build_system_prompt, filter_ads, generate_digest
 from personalization import load_personalization
 from scraper import scrape_channel
 
 logger = logging.getLogger(__name__)
 
-MOSCOW = pytz.timezone("Europe/Moscow")
-_DATA_DIR = Path(__file__).parent / "data"
-_DATA_FILE = _DATA_DIR / "data.json"
-_HISTORY_FILE = _DATA_DIR / "digests_history.json"
-
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
-SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
-
-
-# ─── Shared state helpers ─────────────────────────────────────────────────────
-
-def _load_data() -> dict:
-    if _DATA_FILE.exists():
-        try:
-            return json.loads(_DATA_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
-
-
-def _load_history() -> list:
-    if not _HISTORY_FILE.exists():
-        return []
-    try:
-        return json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-
-def _save_history(history: list) -> None:
-    content = json.dumps(history, ensure_ascii=False, indent=2)
-    tmp = _HISTORY_FILE.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.replace(_HISTORY_FILE)
 
 
 # ─── digest_agent tools ───────────────────────────────────────────────────────
 
 @tool
-def get_configured_channels() -> list[str]:
+async def get_configured_channels() -> list[str]:
     """Return the list of Telegram channels configured by the user."""
-    data = _load_data()
+    data = await db.load()
     return data.get("channels", [])
 
 
@@ -99,10 +62,10 @@ async def filter_ads_tool(posts: list[dict]) -> list[dict]:
 @tool
 async def generate_digest_tool(posts: list[dict]) -> dict:
     """Generate the digest HTML from filtered posts. Returns digest_html, personal_html, stats_html."""
-    data = _load_data()
+    data = await db.load()
     user_data = data.copy()
     user_data["openrouter_key"] = OPENROUTER_KEY
-    recent = _load_history()[-3:]
+    recent = await db.load_history(limit=3)
     digest_html, personal_html, stats_html = await generate_digest(
         posts, user_data, recent_digests=recent
     )
@@ -115,61 +78,52 @@ async def generate_digest_tool(posts: list[dict]) -> dict:
 
 
 @tool
-def load_recent_digests_tool(n: int = 3) -> list[dict]:
+async def load_recent_digests_tool(n: int = 3) -> list[dict]:
     """Load the N most recent digests for context deduplication."""
-    history = _load_history()
-    return history[-n:] if history else []
+    return await db.load_history(limit=n)
 
 
 @tool
-def save_digest_tool(digest_html: str, posts_count: int) -> str:
+async def save_digest_tool(digest_html: str, posts_count: int) -> str:
     """Persist a completed digest to history. Returns 'ok'."""
-    history = _load_history()
-    is_error = digest_html.startswith("Ошибка") or digest_html.startswith("Не нашёл")
-    history.append({
-        "id": len(history) + 1,
-        "date": datetime.now(MOSCOW).strftime("%Y-%m-%d"),
-        "datetime": datetime.now(MOSCOW).isoformat(),
-        "digest": digest_html,
-        "posts_count": posts_count,
-        "is_error": is_error,
-    })
-    _save_history(history)
+    await db.append_to_history(digest_html, posts_count)
     return "ok"
 
 
 # ─── chat_agent tools ─────────────────────────────────────────────────────────
 
 @tool
-def search_digest_history(query: str) -> list[dict]:
+async def search_digest_history(query: str) -> list[dict]:
     """Search past digests by keyword. Returns matching entries (date, snippet)."""
-    history = _load_history()
+    history = await db.load_history()
     q = query.lower()
     results = []
     for item in history:
         if item.get("is_error"):
             continue
-        if q in item.get("digest", "").lower():
+        if q in item.get("digest_html", item.get("digest", "")).lower():
             results.append({
                 "id": item.get("id"),
                 "date": item["date"],
-                "snippet": item["digest"][:300],
+                "snippet": item.get("digest_html", item.get("digest", ""))[:300],
             })
     return results[-10:]
 
 
 @tool
-def get_recent_digests(n: int = 3) -> list[dict]:
+async def get_recent_digests(n: int = 3) -> list[dict]:
     """Return the N most recent digest entries with date and content."""
-    history = _load_history()
-    recent = [h for h in history if not h.get("is_error")][-n:]
-    return [{"id": h.get("id"), "date": h["date"], "digest": h["digest"][:600]} for h in recent]
+    history = await db.load_history(limit=n)
+    return [
+        {"id": h.get("id"), "date": h["date"], "digest": h.get("digest_html", h.get("digest", ""))[:600]}
+        for h in history if not h.get("is_error")
+    ]
 
 
 @tool
-def get_current_focus() -> str:
+async def get_current_focus() -> str:
     """Return the user's current digest focus (if any)."""
-    data = _load_data()
+    data = await db.load()
     return data.get("current_focus", "") or "не задан"
 
 
@@ -207,12 +161,9 @@ def create_digest_agent():
     )
 
 
-def create_chat_agent(checkpointer):
+def create_chat_agent(system_prompt: str, checkpointer):
     """Stateful conversational agent with Supabase-backed memory."""
-    data = _load_data()
-    user_data = data.copy()
-    user_data["openrouter_key"] = OPENROUTER_KEY
-    system = build_system_prompt(user_data)
+    system = system_prompt
     system += (
         "\n\nYou have access to tools to search past digests and get context. "
         "Use search_digest_history when the user asks about past topics. "
@@ -235,22 +186,21 @@ def create_chat_agent(checkpointer):
 
 async def run_digest_agent() -> dict:
     """
-    Run the digest agent and return result dict with digest_html, personal_html,
-    stats_html, posts_count. Called by scheduler and trigger_digest tool.
+    Run the digest agent. Saves result to DB, returns dict for sending.
+    Called by scheduler and bot.py do_send_digest.
     """
     agent = create_digest_agent()
     config = {"configurable": {"thread_id": "digest-run"}}
-    result = await agent.ainvoke(
+    await agent.ainvoke(
         {"messages": [{"role": "user", "content": "Generate today's digest."}]},
         config,
     )
-    # Extract the last tool result that contains digest data from save_digest_tool
-    # The agent saves to disk; we read back the last entry for sending
-    history = _load_history()
+    # Agent called save_digest_tool which wrote to DB — read back last entry
+    history = await db.load_history(limit=1)
     if history:
         last = history[-1]
         return {
-            "digest_html": last["digest"],
+            "digest_html": last.get("digest_html", last.get("digest", "")),
             "personal_html": "",
             "stats_html": "",
             "posts_count": last["posts_count"],
@@ -261,9 +211,13 @@ async def run_digest_agent() -> dict:
 async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
     """
     Run one chat turn. Returns agent's text response.
-    checkpointer must be initialized and passed in (lifecycle managed in bot.py).
+    checkpointer lifecycle managed in bot.py post_init/post_shutdown.
     """
-    agent = create_chat_agent(checkpointer)
+    data = await db.load()
+    user_data = data.copy()
+    user_data["openrouter_key"] = OPENROUTER_KEY
+    system_prompt = build_system_prompt(user_data)
+    agent = create_chat_agent(system_prompt, checkpointer)
     config = {"configurable": {"thread_id": str(user_id)}}
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": message}]},
