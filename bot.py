@@ -140,7 +140,7 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
 
     await _update("⏳ Агент собирает дайджест...")
 
-    result = await run_digest_agent()
+    result = await run_digest_agent(on_status=_update)
 
     digest_html = result["digest_html"]
     personal_html = result.get("personal_html", "")

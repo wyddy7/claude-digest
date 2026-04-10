@@ -182,20 +182,54 @@ def create_chat_agent(system_prompt: str, checkpointer):
     )
 
 
+# ─── Tool call → Telegram label map ──────────────────────────────────────────
+
+_DIGEST_TOOL_LABELS = {
+    "get_configured_channels": "📡 Загружаю список каналов...",
+    "scrape_all_channels":     "⏳ Скрейплю каналы параллельно...",
+    "filter_ads_tool":         "🔍 Фильтрую рекламу...",
+    "load_recent_digests_tool":"📚 Загружаю историю дайджестов...",
+    "generate_digest_tool":    "🤖 Генерирую дайджест...",
+    "save_digest_tool":        "💾 Сохраняю в базу...",
+}
+
+_CHAT_TOOL_LABELS = {
+    "search_digest_history": "🔎 Ищу в истории дайджестов...",
+    "get_recent_digests":    "📚 Читаю последние дайджесты...",
+    "get_current_focus":     "🎯 Проверяю текущий фокус...",
+}
+
+
 # ─── Entry points ─────────────────────────────────────────────────────────────
 
-async def run_digest_agent() -> dict:
+async def run_digest_agent(on_status=None) -> dict:
     """
-    Run the digest agent. Saves result to DB, returns dict for sending.
-    Called by scheduler and bot.py do_send_digest.
+    Run the digest agent with live Telegram status updates.
+    on_status: async callable(text: str) — called on each tool start.
+    Saves result to DB, returns dict for sending.
     """
     agent = create_digest_agent()
     config = {"configurable": {"thread_id": "digest-run"}}
-    await agent.ainvoke(
+
+    async for event in agent.astream_events(
         {"messages": [{"role": "user", "content": "Generate today's digest."}]},
         config,
-    )
-    # Agent called save_digest_tool which wrote to DB — read back last entry
+        version="v2",
+    ):
+        kind = event.get("event")
+        if kind == "on_tool_start":
+            tool_name = event.get("name", "")
+            label = _DIGEST_TOOL_LABELS.get(tool_name)
+            logger.info(f"[digest_agent] tool_start: {tool_name}")
+            if label and on_status:
+                try:
+                    await on_status(label)
+                except Exception:
+                    pass
+        elif kind == "on_tool_end":
+            tool_name = event.get("name", "")
+            logger.info(f"[digest_agent] tool_end:   {tool_name}")
+
     history = await db.load_history(limit=1)
     if history:
         last = history[-1]
@@ -210,7 +244,7 @@ async def run_digest_agent() -> dict:
 
 async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
     """
-    Run one chat turn. Returns agent's text response.
+    Run one chat turn with tool call logging.
     checkpointer lifecycle managed in bot.py post_init/post_shutdown.
     """
     data = await db.load()
@@ -219,11 +253,24 @@ async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
     system_prompt = build_system_prompt(user_data)
     agent = create_chat_agent(system_prompt, checkpointer)
     config = {"configurable": {"thread_id": str(user_id)}}
-    result = await agent.ainvoke(
+
+    final_text = "Не смог ответить."
+    async for event in agent.astream_events(
         {"messages": [{"role": "user", "content": message}]},
         config,
-    )
-    messages = result.get("messages", [])
-    if messages:
-        return messages[-1].content
-    return "Не смог ответить."
+        version="v2",
+    ):
+        kind = event.get("event")
+        if kind == "on_tool_start":
+            tool_name = event.get("name", "")
+            label = _CHAT_TOOL_LABELS.get(tool_name, tool_name)
+            logger.info(f"[chat_agent] tool_start: {tool_name}")
+        elif kind == "on_tool_end":
+            logger.info(f"[chat_agent] tool_end:   {event.get('name', '')}")
+        elif kind == "on_chat_model_end":
+            # Capture final AI message
+            output = event.get("data", {}).get("output")
+            if output and hasattr(output, "content") and output.content:
+                final_text = output.content
+
+    return final_text
