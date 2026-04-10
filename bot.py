@@ -1,9 +1,7 @@
-import json
 import logging
 import os
 from datetime import datetime, timedelta
 from io import BytesIO
-from pathlib import Path
 
 import pytz
 from dotenv import load_dotenv
@@ -27,6 +25,7 @@ from telegram.ext import (
     filters,
 )
 
+import db
 from agent import run_digest_agent, run_chat_turn
 from personalization import get_profile_description
 
@@ -39,10 +38,6 @@ CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 OWNER_ID = CHAT_ID
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
-_DATA_DIR = Path(__file__).parent / "data"
-_DATA_DIR.mkdir(exist_ok=True)
-DATA_FILE = _DATA_DIR / "data.json"
-HISTORY_FILE = _DATA_DIR / "digests_history.json"
 MOSCOW = pytz.timezone("Europe/Moscow")
 
 # Schedule — single source of truth for both bot.py and scheduler.py
@@ -60,78 +55,7 @@ MODELS = {
 }
 
 _BROKEN_MODELS = {"google/gemini-3.1-flash-lite-preview", "google/gemini-3.1-flash"}
-DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
-
-
-def _sanitize_data(data: dict) -> dict:
-    clean = dict(data)
-    clean.pop("openrouter_key", None)
-    clean.pop("description", None)
-    clean.setdefault("channels", DEFAULT_CHANNELS[:])
-    clean.setdefault("focus_auto_reset", False)
-    if clean.get("model") in _BROKEN_MODELS:
-        clean["model"] = DEFAULT_MODEL
-    return clean
-
-
-def load() -> dict:
-    if DATA_FILE.exists():
-        try:
-            data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.error(f"Corrupt data.json, resetting to defaults: {e}")
-            data = {}
-        return _sanitize_data(data)
-    return {
-        "current_focus": "",
-        "focus_auto_reset": False,
-        "model": DEFAULT_MODEL,
-        "channels": DEFAULT_CHANNELS[:],
-        "last_digest": "",
-        "last_digest_time": "",
-        "interaction_history": [],
-    }
-
-
-def save(data: dict):
-    content = json.dumps(_sanitize_data(data), ensure_ascii=False, indent=2)
-    tmp = DATA_FILE.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.replace(DATA_FILE)
-
-
-def add_history(data: dict, entry: str):
-    history = data.setdefault("interaction_history", [])
-    history.append(f"{datetime.now().strftime('%d.%m %H:%M')} — {entry[:120]}")
-    data["interaction_history"] = history[-20:]
-
-
-def load_history() -> list:
-    if not HISTORY_FILE.exists():
-        return []
-    try:
-        return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-
-def append_to_history(digest: str, posts_count: int):
-    history = load_history()
-    is_error = digest.startswith("Ошибка") or digest.startswith("Не нашёл")
-    history.append(
-        {
-            "id": len(history) + 1,
-            "date": datetime.now(MOSCOW).strftime("%Y-%m-%d"),
-            "datetime": datetime.now(MOSCOW).isoformat(),
-            "digest": digest,
-            "posts_count": posts_count,
-            "is_error": is_error,
-        }
-    )
-    content = json.dumps(history, ensure_ascii=False, indent=2)
-    tmp = HISTORY_FILE.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.replace(HISTORY_FILE)
+DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 
 
 def main_kb(focus: str = "") -> ReplyKeyboardMarkup:
@@ -225,13 +149,14 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
 
     await _update("✅ Готово")
 
-    data = load()
+    data = await db.load()
     if data.get("focus_auto_reset") and data.get("current_focus"):
         data["current_focus"] = ""
     data["last_digest"] = digest_html
     data["last_digest_time"] = datetime.now().isoformat()
-    add_history(data, f"Дайджест ({posts_count} постов)")
-    save(data)
+    await db.save(data)
+    await db.add_history(f"Дайджест ({posts_count} постов)")
+    await db.append_to_history(digest_html, posts_count)
 
     date_str = datetime.now(MOSCOW).strftime("%d.%m.%Y")
     full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
@@ -285,9 +210,9 @@ async def _safe_answer(q, text: str = "", show_alert: bool = False):
 async def cb_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     model_id = q.data.split("|", 1)[1]
-    data = load()
+    data = await db.load()
     data["model"] = model_id
-    save(data)
+    await db.save(data)
     await _safe_answer(q, f"✅ {model_id}")
     await q.edit_message_reply_markup(
         reply_markup=settings_kb(model_id, data["channels"], data.get("focus_auto_reset", False))
@@ -297,7 +222,7 @@ async def cb_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await _safe_answer(q)
-    data = load()
+    data = await db.load()
     await q.edit_message_text(
         "📡 *Каналы* — нажми ❌ чтобы удалить:",
         reply_markup=channels_kb(data["channels"]),
@@ -308,10 +233,10 @@ async def cb_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_rmch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     channel = q.data.split("|", 1)[1]
-    data = load()
+    data = await db.load()
     if channel in data["channels"]:
         data["channels"].remove(channel)
-        save(data)
+        await db.save(data)
     await _safe_answer(q, f"Удалён: {channel}")
     await q.edit_message_text(
         "📡 *Каналы*",
@@ -330,7 +255,7 @@ async def cb_addch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_back_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await _safe_answer(q)
-    data = load()
+    data = await db.load()
     await q.edit_message_text(
         "⚙️ *Настройки*",
         reply_markup=settings_kb(data["model"], data["channels"], data.get("focus_auto_reset", False)),
@@ -341,7 +266,7 @@ async def cb_back_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_hp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     page = int(q.data.split("|", 1)[1])
-    history = load_history()
+    history = await db.load_history()
     await _safe_answer(q)
     await q.edit_message_text(
         f"📚 *История* ({len(history)} дайджестов)",
@@ -353,7 +278,7 @@ async def cb_hp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     idx = int(q.data.split("|", 1)[1])
-    history = load_history()
+    history = await db.load_history()
     await _safe_answer(q)
     if idx >= len(history):
         await q.edit_message_text("Запись не найдена.")
@@ -383,7 +308,7 @@ async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     action = q.data
-    data = load()
+    data = await db.load()
     if action == "ci_yes":
         await _safe_answer(q, "Огонь! 🔥")
         await q.edit_message_text(f"Огонь! 🔥 Завтра в {DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d}.")
@@ -407,9 +332,9 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_toggle_autoreset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    data = load()
+    data = await db.load()
     data["focus_auto_reset"] = not data.get("focus_auto_reset", False)
-    save(data)
+    await db.save(data)
     status = "ВКЛ" if data["focus_auto_reset"] else "ВЫКЛ"
     await _safe_answer(q, f"Авто-сброс фокуса: {status}")
     await q.edit_message_reply_markup(
@@ -428,7 +353,7 @@ KB_BUTTONS = {"📰 Дайджест", "📚 История", "👤 Профил
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    data = load()
+    data = await db.load()
     focus = data.get("current_focus", "")
 
     if text == "/cancel":
@@ -445,7 +370,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "📚 История":
-        history = load_history()
+        history = await db.load_history()
         if not history:
             await update.message.reply_text(
                 "История пуста — запусти первый дайджест!",
@@ -492,8 +417,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == "editing_focus":
         context.user_data.pop("state")
         data["current_focus"] = text
-        add_history(data, f"Фокус: {text}")
-        save(data)
+        await db.save(data)
+        await db.add_history(f"Фокус: {text}")
         await update.message.reply_text(f"✅ Фокус: {text}", reply_markup=main_kb(text))
         return
 
@@ -502,7 +427,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel = text.lstrip("@").strip()
         if channel and channel not in data["channels"]:
             data["channels"].append(channel)
-            save(data)
+            await db.save(data)
             await update.message.reply_text(f"✅ Канал {channel} добавлен!", reply_markup=main_kb(focus))
         else:
             await update.message.reply_text(
@@ -511,15 +436,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    add_history(data, f"Msg: {text[:80]}")
-    save(data)
+    await db.add_history(f"Msg: {text[:80]}")
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
 
     checkpointer = context.application.bot_data.get("checkpointer")
     reply = await run_chat_turn(update.effective_user.id, text, checkpointer)
-    data2 = load()
-    add_history(data2, f"Bot: {reply[:80]}")
-    save(data2)
+    await db.add_history(f"Bot: {reply[:80]}")
     await update.message.reply_text(reply, reply_markup=main_kb(focus))
 
 
@@ -567,24 +489,29 @@ async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _post_init(app: Application) -> None:
-    """Initialize Supabase checkpointer once at startup."""
+    """Initialize DB pool and Supabase checkpointer at startup."""
     if not SUPABASE_DB_URL:
-        logger.warning("SUPABASE_DB_URL not set — chat agent will run without persistent memory")
-        app.bot_data["checkpointer"] = None
-        return
+        logger.error("SUPABASE_DB_URL not set — bot cannot start without database")
+        raise RuntimeError("SUPABASE_DB_URL is required")
+
+    # DB pool for user_state and digests tables
+    await db.init_pool(SUPABASE_DB_URL)
+
+    # LangGraph checkpointer for chat_agent memory
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     checkpointer = await AsyncPostgresSaver.from_conn_string(SUPABASE_DB_URL).__aenter__()
     await checkpointer.setup()
     app.bot_data["checkpointer"] = checkpointer
-    logger.info("Supabase checkpointer initialised")
+    logger.info("DB pool and checkpointer initialised")
 
 
 async def _post_shutdown(app: Application) -> None:
-    """Close checkpointer connection on shutdown."""
+    """Close DB pool and checkpointer on shutdown."""
     checkpointer = app.bot_data.get("checkpointer")
     if checkpointer:
         await checkpointer.__aexit__(None, None, None)
-        logger.info("Supabase checkpointer closed")
+    await db.close_pool()
+    logger.info("DB connections closed")
 
 
 def main():
@@ -642,7 +569,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load()
+    data = await db.load()
     await update.message.reply_text(
         "Привет! Твой персональный дайджест-бот 🤖\n\n"
         f"• *{DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d}* — дайджест из каналов\n"
