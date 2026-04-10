@@ -27,9 +27,8 @@ from telegram.ext import (
     filters,
 )
 
-from ai import chat_response, filter_ads, filter_images, generate_digest
+from agent import run_digest_agent, run_chat_turn
 from personalization import get_profile_description
-from scraper import scrape_channel
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -39,6 +38,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 OWNER_ID = CHAT_ID
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 _DATA_DIR = Path(__file__).parent / "data"
 _DATA_DIR.mkdir(exist_ok=True)
 DATA_FILE = _DATA_DIR / "data.json"
@@ -214,61 +214,27 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
             except Exception:
                 pass
 
-    data = load()
-    channels = data["channels"]
+    await _update("⏳ Агент собирает дайджест...")
 
-    all_posts = []
-    for i, ch in enumerate(channels):
-        await _update(f"⏳ Читаю каналы... {ch} ({i + 1}/{len(channels)})")
-        posts = await scrape_channel(ch)
-        all_posts.extend(posts)
+    result = await run_digest_agent()
 
-    await _update(f"🔍 Фильтрую рекламу... ({len(all_posts)} постов)")
-    try:
-        all_posts = await filter_ads(all_posts, OPENROUTER_KEY)
-    except Exception as e:
-        logger.warning(f"filter_ads failed, proceeding with all posts: {e}")
-
-    await _update(f"🤖 Формулирую дайджест... ({len(all_posts)} постов)")
-    recent = load_history()[-3:]
-
-    user_data_for_ai = data.copy()
-    user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
-
-    digest_html, personal_html, stats_html = await generate_digest(
-        all_posts,
-        user_data_for_ai,
-        recent_digests=recent,
-    )
-
-    raw_images = [img for post in all_posts for img in (post.get("image_bytes") or [])]
-    approved = []
-    if raw_images:
-        await _update(f"🖼 Проверяю картинки... ({len(raw_images)} шт)")
-        approved = await filter_images(raw_images, digest_html, OPENROUTER_KEY)
-        logger.info(f"Approved images: {len(approved)}/{len(raw_images)}")
+    digest_html = result["digest_html"]
+    personal_html = result.get("personal_html", "")
+    stats_html = result.get("stats_html", "")
+    posts_count = result.get("posts_count", 0)
 
     await _update("✅ Готово")
 
+    data = load()
     if data.get("focus_auto_reset") and data.get("current_focus"):
         data["current_focus"] = ""
-
     data["last_digest"] = digest_html
     data["last_digest_time"] = datetime.now().isoformat()
-    add_history(data, f"Дайджест ({len(all_posts)} постов)")
+    add_history(data, f"Дайджест ({posts_count} постов)")
     save(data)
-    append_to_history(digest_html, len(all_posts))
 
     date_str = datetime.now(MOSCOW).strftime("%d.%m.%Y")
     full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
-
-    if approved:
-        media = [InputMediaPhoto(BytesIO(image)) for image in approved[:10]]
-        try:
-            await bot.send_media_group(chat_id, media)
-            logger.info(f"Sent {len(media)} images before digest")
-        except Exception as e:
-            logger.warning(f"send_media_group failed: {e}")
 
     max_len = 4096
     if len(full_text) <= max_len:
@@ -549,10 +515,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save(data)
     await context.bot.send_chat_action(update.effective_chat.id, "typing")
 
-    user_data_for_ai = data.copy()
-    user_data_for_ai["openrouter_key"] = OPENROUTER_KEY
-
-    reply = await chat_response(text, user_data_for_ai)
+    checkpointer = context.application.bot_data.get("checkpointer")
+    reply = await run_chat_turn(update.effective_user.id, text, checkpointer)
     data2 = load()
     add_history(data2, f"Bot: {reply[:80]}")
     save(data2)
@@ -602,8 +566,35 @@ async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def _post_init(app: Application) -> None:
+    """Initialize Supabase checkpointer once at startup."""
+    if not SUPABASE_DB_URL:
+        logger.warning("SUPABASE_DB_URL not set — chat agent will run without persistent memory")
+        app.bot_data["checkpointer"] = None
+        return
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    checkpointer = await AsyncPostgresSaver.from_conn_string(SUPABASE_DB_URL).__aenter__()
+    await checkpointer.setup()
+    app.bot_data["checkpointer"] = checkpointer
+    logger.info("Supabase checkpointer initialised")
+
+
+async def _post_shutdown(app: Application) -> None:
+    """Close checkpointer connection on shutdown."""
+    checkpointer = app.bot_data.get("checkpointer")
+    if checkpointer:
+        await checkpointer.__aexit__(None, None, None)
+        logger.info("Supabase checkpointer closed")
+
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
+        .build()
+    )
 
     app.add_handler(TypeHandler(Update, check_owner), group=-1)
 
