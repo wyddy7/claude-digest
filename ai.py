@@ -1,13 +1,12 @@
+import asyncio
 import base64
+import json
 import logging
 from html import escape
 from typing import Optional
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
-from pydantic_ai import Agent, PromptedOutput
-from pydantic_ai.models.openrouter import OpenRouterModel
-from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from personalization import load_personalization
 
@@ -17,6 +16,8 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 AD_FILTER_MODEL = "deepseek/deepseek-chat"
 
+
+# ─── Pydantic schemas ────────────────────────────────────────────────────────
 
 class SourceBlock(BaseModel):
     channel: str
@@ -48,16 +49,13 @@ class AdBatchResult(BaseModel):
     posts: list[PostAdLabel]
 
 
-def _make_openrouter_model(api_key: str, model_id: str) -> OpenRouterModel:
-    return OpenRouterModel(
-        model_id,
-        provider=OpenRouterProvider(api_key=api_key),
-    )
-
+# ─── Client factory ──────────────────────────────────────────────────────────
 
 def _get_client(api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE)
 
+
+# ─── Prompt helpers ──────────────────────────────────────────────────────────
 
 def _render_rule_block(items: list[str], empty_value: str = "- нет") -> str:
     if not items:
@@ -124,7 +122,6 @@ def _format_posts(posts: list[dict]) -> str:
         if post_time_raw:
             try:
                 from datetime import datetime
-
                 dt = datetime.fromisoformat(post_time_raw)
                 date_str = dt.strftime("%d.%m.%Y %H:%M UTC")
             except Exception:
@@ -169,36 +166,34 @@ def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: in
     )
 
 
+# ─── AI functions ─────────────────────────────────────────────────────────────
+
 async def filter_ads(posts: list[dict], api_key: str, batch_size: int = 3) -> list[dict]:
-    """Pre-filter posts: drop pure ads, keep posts with real signal even if they mention products."""
+    """Pre-filter posts: drop pure ads, keep posts with real signal."""
     if not posts:
         return []
 
-    model = _make_openrouter_model(api_key, AD_FILTER_MODEL)
-    agent = Agent(
-        model,
-        output_type=PromptedOutput(AdBatchResult),
-        system_prompt=(
-            "Ты — строгий редактор технического дайджеста. "
-            "Твоя задача: определить, является ли пост чистой рекламой.\n\n"
-            "РЕКЛАМА (is_ad=true): пост продаёт курс, сервис или событие БЕЗ реального контента — "
-            "только призыв купить/зарегистрироваться/подписаться, без конкретных фактов или объяснений.\n\n"
-            "НЕ РЕКЛАМА (is_ad=false): пост содержит реальные инсайты, факты, анализ или примеры, "
-            "даже если упоминает конкретный продукт или компанию. "
-            "Фраза 'не реклама' в тексте — подсказка, но не решающий фактор, смотри на содержание.\n\n"
-            "ГРАНИЧНЫЕ СЛУЧАИ — НЕ РЕКЛАМА:\n"
-            "- Событие/вебинар с конкретной программой, спикерами или разбором темы → НЕ реклама\n"
-            "- Продуктовый апдейт с описанием новых фич или архитектурных решений → НЕ реклама\n"
-            "- Пост упоминает продукт, но основную часть занимает анализ, список фактов или пример → НЕ реклама\n\n"
-            "РЕКЛАМА — только если: нет фактического контента, только CTA или восклицания типа "
-            "'купи', 'зарегистрируйся', 'успей до конца недели', 'скидка 50%'."
-        ),
-        retries=1,
+    client = _get_client(api_key)
+    ad_system = (
+        "Ты — строгий редактор технического дайджеста. "
+        "Твоя задача: определить, является ли пост чистой рекламой.\n\n"
+        "РЕКЛАМА (is_ad=true): пост продаёт курс, сервис или событие БЕЗ реального контента — "
+        "только призыв купить/зарегистрироваться/подписаться, без конкретных фактов или объяснений.\n\n"
+        "НЕ РЕКЛАМА (is_ad=false): пост содержит реальные инсайты, факты, анализ или примеры, "
+        "даже если упоминает конкретный продукт или компанию. "
+        "Фраза 'не реклама' в тексте — подсказка, но не решающий фактор, смотри на содержание.\n\n"
+        "ГРАНИЧНЫЕ СЛУЧАИ — НЕ РЕКЛАМА:\n"
+        "- Событие/вебинар с конкретной программой, спикерами или разбором темы → НЕ реклама\n"
+        "- Продуктовый апдейт с описанием новых фич или архитектурных решений → НЕ реклама\n"
+        "- Пост упоминает продукт, но основную часть занимает анализ, список фактов или пример → НЕ реклама\n\n"
+        "РЕКЛАМА — только если: нет фактического контента, только CTA или восклицания типа "
+        "'купи', 'зарегистрируйся', 'успей до конца недели', 'скидка 50%'.\n\n"
+        f"Отвечай ТОЛЬКО валидным JSON по схеме: {AdBatchResult.model_json_schema()}"
     )
 
     kept: list[dict] = []
     for batch_start in range(0, len(posts), batch_size):
-        batch = posts[batch_start : batch_start + batch_size]
+        batch = posts[batch_start: batch_start + batch_size]
         lines = []
         for i, p in enumerate(batch):
             lines.append(f"[{i}] КАНАЛ: {p['channel']}\nТЕКСТ:\n{p['text'][:800]}")
@@ -207,11 +202,20 @@ async def filter_ads(posts: list[dict], api_key: str, batch_size: int = 3) -> li
             + "\n\n---\n\n".join(lines)
         )
         try:
-            result = await agent.run(prompt)
-            labels = {lbl.index: lbl.is_ad for lbl in result.output.posts}
+            resp = await client.chat.completions.create(
+                model=AD_FILTER_MODEL,
+                messages=[
+                    {"role": "system", "content": ad_system},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+            )
+            data = json.loads(resp.choices[0].message.content)
+            result = AdBatchResult.model_validate(data)
+            labels = {lbl.index: lbl.is_ad for lbl in result.posts}
             for i, post in enumerate(batch):
-                is_ad = labels.get(i, False)
-                if not is_ad:
+                if not labels.get(i, False):
                     kept.append(post)
                 else:
                     logger.info(f"Ad-filter dropped: [{post['channel']}] {post['text'][:60]!r}")
@@ -237,6 +241,7 @@ async def generate_digest(
     focus_line = f"\nФОКУС: «{focus}» — приоритизируй посты про это" if focus else ""
 
     posts_text = _format_posts(posts)
+    schema_hint = DigestResult.model_json_schema()
     prompt = (
         f"Посты из Telegram-каналов:{focus_line}\n\n"
         f"{posts_text}\n\n---\n"
@@ -245,30 +250,33 @@ async def generate_digest(
         "- url: ТОЧНАЯ ссылка из поля ССЫЛКА (не придумывай)\n"
         "- post_date: дата из поля ДАТА (формат DD.MM.YYYY)\n"
         "- bullets: все факты из поста, одна строка — один факт\n"
-        "- example: только если концепт нетривиальный — одно предложение как первокурснику"
+        "- example: только если концепт нетривиальный — одно предложение как первокурснику\n\n"
+        f"Отвечай ТОЛЬКО валидным JSON по схеме: {schema_hint}"
     )
 
     system = build_system_prompt(user_data, recent_digests)
+    client = _get_client(api_key)
 
     try:
-        model = _make_openrouter_model(api_key, model_id)
-        agent = Agent(
-            model,
-            output_type=PromptedOutput(DigestResult),
-            system_prompt=system,
-            retries=2,
+        resp = await client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
         )
-        result = await agent.run(prompt)
+        data = json.loads(resp.choices[0].message.content)
+        result = DigestResult.model_validate(data)
         stats = _to_html_stats(
             posts_checked=len(posts),
             channels_count=len({p["channel"] for p in posts}),
-            sources_selected=len(result.output.sources),
+            sources_selected=len(result.sources),
         )
-        return _to_html_digest(result.output), _to_html_personal(result.output), stats
+        return _to_html_digest(result), _to_html_personal(result), stats
     except Exception as e:
-        logger.error(f"pydantic-ai digest error: {e}")
+        logger.error(f"digest generation error: {e}")
         import traceback
-
         logger.error(traceback.format_exc())
         return f"Ошибка генерации дайджеста: {e}", None, ""
 
@@ -321,22 +329,15 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
     return approved
 
 
-async def chat_response(user_message: str, user_data: dict) -> str:
-    client = _get_client(user_data["openrouter_key"])
-    model = user_data.get("model", "anthropic/claude-3.5-haiku")
-    last_digest = user_data.get("last_digest", "")
-    digest_ctx = f"\nПОСЛЕДНИЙ ДАЙДЖЕСТ:\n{last_digest[:800]}" if last_digest else ""
-    system = build_system_prompt(user_data) + digest_ctx
-    try:
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=700,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        logger.error(f"chat error: {e}")
-        return f"Ошибка: {e}"
+async def generate_weekly_recap(history_7days: list[dict]) -> str:
+    """Generate weekly insights recap for Sunday 18:00 job."""
+    if not history_7days:
+        return ""
+    total = len(history_7days)
+    total_posts = sum(h.get("posts_count", 0) for h in history_7days)
+    digests_text = "\n\n".join(
+        f"[{h['date']}]\n{h['digest'][:400]}"
+        for h in history_7days
+        if not h.get("is_error")
+    )
+    return f"📅 За эту неделю: {total} дайджестов, {total_posts} постов проверено.\n\n{digests_text[:1200]}"
