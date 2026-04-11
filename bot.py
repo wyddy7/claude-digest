@@ -363,7 +363,9 @@ KB_BUTTONS = {"📰 Дайджест", "📚 История", "👤 Профил
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    logger.info(f"handle_text: {text!r}")
     data = await db.load()
+    logger.debug(f"handle_text: db.load() done")
     focus = data.get("current_focus", "")
 
     if text == "/cancel":
