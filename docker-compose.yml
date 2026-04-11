@@ -5,7 +5,6 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
       - ./config:/app/config
 
   scheduler:
@@ -14,6 +13,5 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
       - ./config:/app/config
     command: ["uv", "run", "scheduler.py"]
