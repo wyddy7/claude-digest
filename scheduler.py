@@ -1,6 +1,8 @@
 """
 Standalone scheduler for daily digest and check-in.
 Runs as a separate process/container — isolated from bot polling event loop.
+
+DB pool is initialized once at startup and closed on shutdown.
 """
 import asyncio
 import logging
@@ -13,6 +15,10 @@ from dotenv import load_dotenv
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.helpers import escape_markdown
 
+import db
+from agent import run_digest_pipeline
+from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -23,27 +29,89 @@ MOSCOW = pytz.timezone("Europe/Moscow")
 
 
 async def run_digest():
-    from bot import do_send_digest
-
     logger.info("Scheduled digest starting")
     async with Bot(BOT_TOKEN) as bot:
-        await do_send_digest(bot, CHAT_ID)
-    logger.info("Scheduled digest done")
+        status_msg = None
+
+        async def _on_status(text: str):
+            nonlocal status_msg
+            try:
+                if status_msg is None:
+                    status_msg = await bot.send_message(CHAT_ID, text)
+                else:
+                    await status_msg.edit_text(text)
+            except Exception as e:
+                logger.warning(f"scheduler: status update failed: {e}")
+
+        result = await run_digest_pipeline(on_status=_on_status)
+
+        digest_html = result["digest_html"]
+        personal_html = result.get("personal_html", "")
+        stats_html = result.get("stats_html", "")
+        posts_count = result.get("posts_count", 0)
+
+        if status_msg:
+            try:
+                await status_msg.edit_text("✅ Готово")
+            except Exception:
+                pass
+
+        # Save to user_state
+        data = await db.load()
+        if data.get("focus_auto_reset") and data.get("current_focus"):
+            data["current_focus"] = ""
+        data["last_digest"] = digest_html
+        import datetime
+        data["last_digest_time"] = datetime.datetime.now().isoformat()
+        await db.save(data)
+        await db.add_history(f"Дайджест ({posts_count} постов)")
+
+        from datetime import datetime as dt
+        date_str = dt.now(MOSCOW).strftime("%d.%m.%Y")
+        full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
+
+        max_len = 4096
+        chunks = []
+        if len(full_text) <= max_len:
+            chunks = [full_text]
+        else:
+            paragraphs = full_text.split("\n\n")
+            current = ""
+            for para in paragraphs:
+                if len(current) + len(para) + 2 <= max_len:
+                    current = current + ("\n\n" if current else "") + para
+                else:
+                    if current:
+                        chunks.append(current)
+                    while len(para) > max_len:
+                        chunks.append(para[:max_len])
+                        para = para[max_len:]
+                    current = para
+            if current:
+                chunks.append(current)
+
+        for chunk in chunks:
+            await bot.send_message(CHAT_ID, chunk, parse_mode="HTML", disable_web_page_preview=True)
+
+        personal_parts = [p for p in [personal_html, stats_html] if p]
+        if personal_parts:
+            await bot.send_message(
+                CHAT_ID, "\n\n".join(personal_parts),
+                parse_mode="HTML", disable_web_page_preview=True,
+            )
+
+    logger.info(f"Scheduled digest done: {posts_count} posts")
 
 
 async def run_checkin():
-    from bot import load
-
-    data = load()
+    data = await db.load()
     focus = data.get("current_focus", "")
     focus_line = f" Как дела с *{escape_markdown(focus, version=1)}*?" if focus else ""
-    kb = InlineKeyboardMarkup(
-        [[
-            InlineKeyboardButton("✅ Прочитал", callback_data="ci_yes"),
-            InlineKeyboardButton("❌ Не успел", callback_data="ci_no"),
-            InlineKeyboardButton("💬 Поговорить", callback_data="ci_talk"),
-        ]]
-    )
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Прочитал", callback_data="ci_yes"),
+        InlineKeyboardButton("❌ Не успел", callback_data="ci_no"),
+        InlineKeyboardButton("💬 Поговорить", callback_data="ci_talk"),
+    ]])
     async with Bot(BOT_TOKEN) as bot:
         await bot.send_message(
             CHAT_ID,
@@ -55,7 +123,13 @@ async def run_checkin():
 
 
 async def _run():
-    from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
+    dsn = os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        logger.error("SUPABASE_DB_URL not set — scheduler cannot start without database")
+        return
+
+    await db.init_pool(dsn)
+    logger.info("DB pool opened")
 
     scheduler = AsyncIOScheduler(timezone=MOSCOW)
     scheduler.add_job(run_digest, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")
@@ -67,18 +141,15 @@ async def _run():
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop_event.set)
     except NotImplementedError:
-        # Windows: loop.add_signal_handler is Unix-only
         signal.signal(signal.SIGINT, lambda *_: loop.call_soon_threadsafe(stop_event.set))
 
-    scheduler_running = False
     try:
         scheduler.start()
-        scheduler_running = True
         logger.info(f"Scheduler started — digest {DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d} MSK, checkin {CHECKIN_HOUR:02d}:{CHECKIN_MINUTE:02d} MSK")
         await stop_event.wait()
     finally:
-        if scheduler_running:
-            scheduler.shutdown()
+        scheduler.shutdown()
+        await db.close_pool()
         logger.info("Scheduler stopped")
 
 
