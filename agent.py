@@ -30,13 +30,18 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
-def _make_model(model: str = "deepseek/deepseek-chat") -> ChatOpenAI:
-    """ChatOpenAI pointed at OpenRouter. Read key lazily so load_dotenv() order doesn't matter."""
+def _make_model(role: str = "digest") -> ChatOpenAI:
+    """
+    Build a ChatOpenAI pointed at OpenRouter.
+    role: 'chat' | 'digest' — maps to models.chat / models.digest in personalization.yaml
+    """
+    cfg = load_personalization()
+    model_id = cfg.get("models", {}).get(role, "deepseek/deepseek-chat")
     key = os.getenv("OPENROUTER_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_KEY env var is not set")
     return ChatOpenAI(
-        model=model,
+        model=model_id,
         api_key=key,
         base_url=OPENROUTER_BASE,
     )
@@ -166,7 +171,7 @@ def _build_digest_system_prompt() -> str:
 def create_digest_agent():
     """Stateless agent for scheduled digest generation."""
     return create_deep_agent(
-        model=_make_model(),
+        model=_make_model("digest"),
         system_prompt=_build_digest_system_prompt(),
         tools=[
             get_configured_channels,
@@ -194,7 +199,7 @@ def create_chat_agent(system_prompt: str, checkpointer):
         "Use get_current_focus to understand what the user is currently focused on."
     )
     return create_deep_agent(
-        model=_make_model(),
+        model=_make_model("chat"),
         system_prompt=system,
         tools=[
             search_digest_history,
