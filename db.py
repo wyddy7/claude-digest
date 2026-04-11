@@ -31,6 +31,9 @@ async def init_pool(dsn: str) -> AsyncConnectionPool:
         min_size=1,
         max_size=5,
         open=False,
+        # Validate connection with SELECT 1 before handing it out — catches
+        # SSL EOF / stale connections from Supabase Session Pooler idle timeout.
+        check=AsyncConnectionPool.check_connection,
         kwargs={
             "connect_timeout": 10,
             "keepalives": 1,
@@ -40,12 +43,12 @@ async def init_pool(dsn: str) -> AsyncConnectionPool:
         },
     )
     await _pool.open()
-    # pool_available=0 right after open() — background worker hasn't handed the
-    # connection to the idle queue yet.  A warm-up query forces it through so
-    # subsequent pool.connection() calls return immediately instead of blocking.
+    # pool_available=0 right after open() — background worker hasn't placed the
+    # connection in the idle queue yet.  Warm-up forces the full cycle so
+    # pool.connection() calls return immediately once polling starts.
     async with _pool.connection() as conn:
         await conn.execute("SELECT 1")
-    logger.info(f"DB pool opened and warmed up, stats={_pool.get_stats()}")
+    logger.info(f"DB pool ready, stats={_pool.get_stats()}")
     return _pool
 
 
