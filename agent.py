@@ -27,15 +27,17 @@ from scraper import scrape_channel
 
 logger = logging.getLogger(__name__)
 
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
 def _make_model() -> ChatOpenAI:
-    """ChatOpenAI pointed at OpenRouter — the standard LangChain/OpenRouter setup."""
+    """ChatOpenAI pointed at OpenRouter. Read key lazily so load_dotenv() order doesn't matter."""
+    key = os.getenv("OPENROUTER_KEY")
+    if not key:
+        raise RuntimeError("OPENROUTER_KEY env var is not set")
     return ChatOpenAI(
         model="anthropic/claude-sonnet-4-6",
-        api_key=OPENROUTER_KEY,
+        api_key=key,
         base_url=OPENROUTER_BASE,
     )
 
@@ -69,7 +71,7 @@ async def scrape_all_channels(channels: list[str]) -> list[dict]:
 @tool
 async def filter_ads_tool(posts: list[dict]) -> list[dict]:
     """Filter out pure ad posts. Returns only posts with real signal."""
-    return await filter_ads(posts, OPENROUTER_KEY)
+    return await filter_ads(posts, os.getenv("OPENROUTER_KEY"))
 
 
 @tool
@@ -77,7 +79,7 @@ async def generate_digest_tool(posts: list[dict]) -> dict:
     """Generate the digest HTML from filtered posts. Returns digest_html, personal_html, stats_html."""
     data = await db.load()
     user_data = data.copy()
-    user_data["openrouter_key"] = OPENROUTER_KEY
+    user_data["openrouter_key"] = os.getenv("OPENROUTER_KEY")
     recent = await db.load_history(limit=3)
     digest_html, personal_html, stats_html = await generate_digest(
         posts, user_data, recent_digests=recent
@@ -273,7 +275,7 @@ async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
     """
     data = await db.load()
     user_data = data.copy()
-    user_data["openrouter_key"] = OPENROUTER_KEY
+    user_data["openrouter_key"] = os.getenv("OPENROUTER_KEY")
     system_prompt = build_system_prompt(user_data)
     agent = create_chat_agent(system_prompt, checkpointer)
     config = {"configurable": {"thread_id": str(user_id)}}
