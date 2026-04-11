@@ -26,7 +26,21 @@ _pool: Optional[AsyncConnectionPool] = None
 
 async def init_pool(dsn: str) -> AsyncConnectionPool:
     global _pool
-    _pool = AsyncConnectionPool(dsn, min_size=1, max_size=5, open=False)
+    _pool = AsyncConnectionPool(
+        dsn,
+        min_size=1,
+        max_size=5,
+        open=False,
+        max_idle=120.0,   # recycle idle connections every 2 min (before Supabase idle-timeout drops them)
+        max_lifetime=600.0,
+        kwargs={
+            "connect_timeout": 10,
+            "keepalives": 1,
+            "keepalives_idle": 30,   # send OS keepalive after 30s idle
+            "keepalives_interval": 5,
+            "keepalives_count": 5,
+        },
+    )
     await _pool.open()
     logger.info("DB pool opened")
     return _pool
