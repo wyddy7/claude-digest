@@ -49,7 +49,7 @@ OWNER_ID = CHAT_ID
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 MOSCOW = pytz.timezone("Europe/Moscow")
 
 # Schedule — single source of truth for both bot.py and scheduler.py
@@ -506,11 +506,11 @@ async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _post_init(app: Application) -> None:
     """Initialize supabase client and in-memory checkpointer at startup."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        logger.error("SUPABASE_URL or SUPABASE_KEY not set")
+        raise RuntimeError("SUPABASE_URL and SUPABASE_KEY are required")
 
-    await db.init_supabase(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    await db.init_supabase(SUPABASE_URL, SUPABASE_KEY)
 
     from langgraph.checkpoint.memory import MemorySaver
     app.bot_data["checkpointer"] = MemorySaver()

@@ -124,9 +124,9 @@ async def run_checkin():
 
 async def _run():
     url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_KEY")
+    key = os.getenv("SUPABASE_KEY")
     if not url or not key:
-        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
+        logger.error("SUPABASE_URL or SUPABASE_KEY not set")
         return
 
     await db.init_supabase(url, key)

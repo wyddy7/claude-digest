@@ -17,7 +17,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from supabase import AsyncClient, acreate_client
+from supabase import AsyncClient, create_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ async def init_pool(dsn: str) -> None:
 async def init_supabase(url: str, key: str) -> None:
     """Create async supabase client and verify connectivity."""
     global _client
-    _client = await acreate_client(url, key)
+    _client = await create_async_client(url, key)
     # Verify connectivity
     resp = await _client.table("user_state").select("id").eq("id", 1).execute()
     logger.info(f"DB connection verified (supabase-py HTTP, rows={len(resp.data)})")
