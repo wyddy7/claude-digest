@@ -1,7 +1,7 @@
 # Model IDs for each agent role (OpenRouter model strings).
 # Change here to switch models without touching code.
 models:
-  chat: "anthropic/claude-sonnet-4-6"     # conversational chat agent
+  chat: "anthropic/claude-sonnet-4.6"     # conversational chat agent
   digest: "deepseek/deepseek-chat"         # digest orchestration (cheaper)
   vision: "openai/gpt-4o"                  # image understanding in scraper (not yet wired)
 

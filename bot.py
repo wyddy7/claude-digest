@@ -32,11 +32,15 @@ from telegram.ext import (
 )
 
 import db
-from agent import run_digest_agent, run_chat_turn
+from agent import run_digest_pipeline, run_chat_turn
 from personalization import get_profile_description
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
+# Keep noisy libraries at INFO even in DEBUG mode
+for _lib in ("httpx", "httpcore", "telegram", "apscheduler"):
+    logging.getLogger(_lib).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -53,10 +57,10 @@ CHECKIN_HOUR, CHECKIN_MINUTE = 18, 0
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 
 MODELS = {
-    "🚀 Claude Sonnet 4.6": "anthropic/claude-sonnet-4-6",
-    "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
+    "🚀 Claude Sonnet 4.6": "anthropic/claude-sonnet-4.6",
+    "⚡ Claude Haiku 4.5": "anthropic/claude-haiku-4.5",
     "🧠 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
-    "⚡ Gemini 2.0 Flash": "google/gemini-2.0-flash-001",
+    "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
     "🟢 GPT-4o Mini": "openai/gpt-4o-mini",
 }
 
@@ -146,7 +150,7 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
 
     await _update("⏳ Агент собирает дайджест...")
 
-    result = await run_digest_agent(on_status=_update)
+    result = await run_digest_pipeline(on_status=_update)
 
     digest_html = result["digest_html"]
     personal_html = result.get("personal_html", "")
@@ -291,10 +295,10 @@ async def cb_hv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     item = history[idx]
     digest_id = item.get("id", idx + 1)
-    text = f"📰 <b>Дайджест {item['date']} #{digest_id}</b>\n\n{item['digest']}"
+    text = f"📰 <b>Дайджест {item['date']} #{digest_id}</b>\n\n{item.get('digest_html', '')}"
     if len(text) > 4000:
         header = f"📰 <b>Дайджест {item['date']} #{digest_id}</b>\n\n"
-        body = item["digest"]
+        body = item.get("digest_html", "")
         truncated = header
         for para in body.split("\n\n"):
             candidate = truncated + ("\n\n" if truncated != header else "") + para
@@ -554,9 +558,22 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_edit_profile, pattern="^edit_profile$"))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(error_handler)
 
     logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Unhandled exception", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_chat:
+        try:
+            await context.bot.send_message(
+                update.effective_chat.id,
+                "⚠️ Что-то пошло не так. Попробуй ещё раз.",
+            )
+        except Exception:
+            pass
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):

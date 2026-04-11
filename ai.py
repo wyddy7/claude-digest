@@ -90,7 +90,7 @@ def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = Non
         for digest in recent_digests[-3:]:
             if digest.get("is_error"):
                 continue
-            clean = _strip_html(digest["digest"])
+            clean = _strip_html(digest.get("digest_html", ""))
             prev_lines.append(f"[{digest['date']}]\n{clean[:600]}")
         if prev_lines:
             prev = "ПРЕДЫДУЩИЕ ДАЙДЖЕСТЫ:\n" + "\n\n".join(prev_lines)

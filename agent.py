@@ -1,13 +1,13 @@
 """
 Agent layer for digest_bot.
 
-Two agents:
-- digest_agent: stateless, orchestrates scraping → filtering → generation
-- chat_agent:   stateful (Supabase checkpointer), conversational with history tools
+Two components:
+- run_digest_pipeline: stateless deterministic pipeline (scrape → filter → generate → save)
+- chat_agent:          stateful (Supabase checkpointer), conversational with history tools
 
 Entry points:
-- run_digest_agent(bot, chat_id, status_msg) — called by scheduler and trigger_digest tool
-- run_chat_turn(user_id, message, user_data) — called by handle_text in bot.py
+- run_digest_pipeline(on_status) — called by scheduler and bot
+- run_chat_turn(user_id, message, checkpointer) — called by handle_text in bot.py
 """
 
 import asyncio
@@ -17,8 +17,6 @@ import os
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
-from deepagents.middleware.permissions import FilesystemPermission
-from langgraph.errors import GraphRecursionError
 
 import db
 from ai import build_system_prompt, filter_ads, generate_digest
@@ -30,13 +28,10 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
-def _make_model(role: str = "digest") -> ChatOpenAI:
-    """
-    Build a ChatOpenAI pointed at OpenRouter.
-    role: 'chat' | 'digest' — maps to models.chat / models.digest in personalization.yaml
-    """
+def _make_model(role: str = "chat") -> ChatOpenAI:
+    """Build a ChatOpenAI pointed at OpenRouter. role: 'chat' | 'digest'."""
     cfg = load_personalization()
-    model_id = cfg.get("models", {}).get(role, "deepseek/deepseek-chat")
+    model_id = cfg.get("models", {}).get(role, "anthropic/claude-sonnet-4-6")
     key = os.getenv("OPENROUTER_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_KEY env var is not set")
@@ -45,69 +40,6 @@ def _make_model(role: str = "digest") -> ChatOpenAI:
         api_key=key,
         base_url=OPENROUTER_BASE,
     )
-
-
-# ─── digest_agent tools ───────────────────────────────────────────────────────
-
-@tool
-async def get_configured_channels() -> list[str]:
-    """Return the list of Telegram channels configured by the user."""
-    data = await db.load()
-    return data.get("channels", [])
-
-
-@tool
-async def scrape_all_channels(channels: list[str]) -> list[dict]:
-    """Scrape all given Telegram channels in parallel. Returns flat list of posts."""
-    results = await asyncio.gather(
-        *[scrape_channel(ch) for ch in channels],
-        return_exceptions=True,
-    )
-    posts = []
-    for ch, result in zip(channels, results):
-        if isinstance(result, Exception):
-            logger.warning(f"scrape_all_channels: {ch} failed: {result}")
-        else:
-            posts.extend(result)
-    logger.info(f"scrape_all_channels: {len(posts)} posts from {len(channels)} channels")
-    return posts
-
-
-@tool
-async def filter_ads_tool(posts: list[dict]) -> list[dict]:
-    """Filter out pure ad posts. Returns only posts with real signal."""
-    return await filter_ads(posts, os.getenv("OPENROUTER_KEY"))
-
-
-@tool
-async def generate_digest_tool(posts: list[dict]) -> dict:
-    """Generate the digest HTML from filtered posts. Returns digest_html, personal_html, stats_html."""
-    data = await db.load()
-    user_data = data.copy()
-    user_data["openrouter_key"] = os.getenv("OPENROUTER_KEY")
-    recent = await db.load_history(limit=3)
-    digest_html, personal_html, stats_html = await generate_digest(
-        posts, user_data, recent_digests=recent
-    )
-    return {
-        "digest_html": digest_html,
-        "personal_html": personal_html or "",
-        "stats_html": stats_html or "",
-        "posts_count": len(posts),
-    }
-
-
-@tool
-async def load_recent_digests_tool(n: int = 3) -> list[dict]:
-    """Load the N most recent digests for context deduplication."""
-    return await db.load_history(limit=n)
-
-
-@tool
-async def save_digest_tool(digest_html: str, posts_count: int) -> str:
-    """Persist a completed digest to history. Returns 'ok'."""
-    await db.append_to_history(digest_html, posts_count)
-    return "ok"
 
 
 # ─── chat_agent tools ─────────────────────────────────────────────────────────
@@ -121,11 +53,12 @@ async def search_digest_history(query: str) -> list[dict]:
     for item in history:
         if item.get("is_error"):
             continue
-        if q in item.get("digest_html", item.get("digest", "")).lower():
+        content = item.get("digest_html", "")
+        if q in content.lower():
             results.append({
                 "id": item.get("id"),
                 "date": item["date"],
-                "snippet": item.get("digest_html", item.get("digest", ""))[:300],
+                "snippet": content[:300],
             })
     return results[-10:]
 
@@ -135,7 +68,7 @@ async def get_recent_digests(n: int = 3) -> list[dict]:
     """Return the N most recent digest entries with date and content."""
     history = await db.load_history(limit=n)
     return [
-        {"id": h.get("id"), "date": h["date"], "digest": h.get("digest_html", h.get("digest", ""))[:600]}
+        {"id": h.get("id"), "date": h["date"], "digest": h.get("digest_html", "")[:600]}
         for h in history if not h.get("is_error")
     ]
 
@@ -147,52 +80,11 @@ async def get_current_focus() -> str:
     return data.get("current_focus", "") or "не задан"
 
 
-# ─── Agent factories ──────────────────────────────────────────────────────────
-
-def _build_digest_system_prompt() -> str:
-    cfg = load_personalization()
-    profile = cfg.get("profile", {}).get("description", "")
-    return (
-        "You are a personal digest curator agent. Run EXACTLY these 5 steps in order, ONCE each:\n"
-        "1. Call get_configured_channels\n"
-        "2. Call scrape_all_channels ONCE with that list — do NOT retry even if posts = []\n"
-        "3. Call filter_ads_tool with the posts list (pass [] if empty)\n"
-        "4. Call generate_digest_tool with the filtered posts (pass [] if empty)\n"
-        "5. Call save_digest_tool with digest_html and posts_count from step 4\n"
-        "Then reply: channels N, posts scraped N, posts after filter N, saved.\n\n"
-        "CRITICAL RULES:\n"
-        "- Call each tool EXACTLY ONCE. Never retry.\n"
-        "- 0 posts is a valid result — proceed through ALL 5 steps anyway.\n"
-        "- Do NOT use ls, read_file, write_file, glob, grep, execute. No filesystem access.\n\n"
-        f"User profile: {profile}"
-    )
-
-
-def create_digest_agent():
-    """Stateless agent for scheduled digest generation."""
-    return create_deep_agent(
-        model=_make_model("digest"),
-        system_prompt=_build_digest_system_prompt(),
-        tools=[
-            get_configured_channels,
-            scrape_all_channels,
-            filter_ads_tool,
-            generate_digest_tool,
-            load_recent_digests_tool,
-            save_digest_tool,
-        ],
-        # Deny all filesystem access — deepagents adds ls/read_file/etc by default,
-        # we don't want the agent wasting steps on filesystem exploration.
-        permissions=[
-            FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="deny"),
-        ],
-    )
-
+# ─── Chat agent factory ───────────────────────────────────────────────────────
 
 def create_chat_agent(system_prompt: str, checkpointer):
     """Stateful conversational agent with Supabase-backed memory."""
-    system = system_prompt
-    system += (
+    system = system_prompt + (
         "\n\nYou have access to tools to search past digests and get context. "
         "Use search_digest_history when the user asks about past topics. "
         "Use get_recent_digests to reference what was covered recently. "
@@ -210,16 +102,7 @@ def create_chat_agent(system_prompt: str, checkpointer):
     )
 
 
-# ─── Tool call → Telegram label map ──────────────────────────────────────────
-
-_DIGEST_TOOL_LABELS = {
-    "get_configured_channels": "📡 Загружаю список каналов...",
-    "scrape_all_channels":     "⏳ Скрейплю каналы параллельно...",
-    "filter_ads_tool":         "🔍 Фильтрую рекламу...",
-    "load_recent_digests_tool":"📚 Загружаю историю дайджестов...",
-    "generate_digest_tool":    "🤖 Генерирую дайджест...",
-    "save_digest_tool":        "💾 Сохраняю в базу...",
-}
+# ─── Status labels ────────────────────────────────────────────────────────────
 
 _CHAT_TOOL_LABELS = {
     "search_digest_history": "🔎 Ищу в истории дайджестов...",
@@ -227,58 +110,84 @@ _CHAT_TOOL_LABELS = {
     "get_current_focus":     "🎯 Проверяю текущий фокус...",
 }
 
+_DIGEST_STATUS = {
+    "channels": "📡 Загружаю список каналов...",
+    "scrape":   "⏳ Скрейплю каналы параллельно...",
+    "filter":   "🔍 Фильтрую рекламу...",
+    "generate": "🤖 Генерирую дайджест...",
+    "save":     "💾 Сохраняю в базу...",
+}
+
 
 # ─── Entry points ─────────────────────────────────────────────────────────────
 
-async def run_digest_agent(on_status=None) -> dict:
+async def run_digest_pipeline(on_status=None) -> dict:
     """
-    Run the digest agent with live Telegram status updates.
-    on_status: async callable(text: str) — called on each tool start.
-    Saves result to DB, returns dict for sending.
+    Run the digest pipeline directly — no agent overhead.
+    Steps: load channels → scrape (parallel) → filter ads → generate → save.
+    on_status: async callable(text: str) — called before each step.
+    Returns dict: digest_html, personal_html, stats_html, posts_count.
     """
-    agent = create_digest_agent()
-    # recursion_limit: each tool call = 2+ LangGraph steps; 5 tools + LLM rounds ~= 15-20 steps.
-    # Set 50 to have headroom without risk of infinite loops.
-    config = {"recursion_limit": 50, "configurable": {"thread_id": "digest-run"}}
+    async def _status(label: str):
+        if on_status:
+            try:
+                await on_status(label)
+            except Exception:
+                pass
 
-    try:
-        async for event in agent.astream_events(
-            {"messages": [{"role": "user", "content": "Generate today's digest."}]},
-            config,
-            version="v2",
-        ):
-            kind = event.get("event")
-            if kind == "on_tool_start":
-                tool_name = event.get("name", "")
-                label = _DIGEST_TOOL_LABELS.get(tool_name)
-                logger.info(f"[digest_agent] tool_start: {tool_name}")
-                if label and on_status:
-                    try:
-                        await on_status(label)
-                    except Exception:
-                        pass
-            elif kind == "on_tool_end":
-                tool_name = event.get("name", "")
-                logger.info(f"[digest_agent] tool_end:   {tool_name}")
-    except GraphRecursionError:
-        logger.warning("[digest_agent] hit recursion limit — reading last saved digest")
+    # Step 1 — load channels
+    await _status(_DIGEST_STATUS["channels"])
+    data = await db.load()
+    channels = data.get("channels", [])
+    logger.info(f"[digest] channels ({len(channels)}): {channels}")
 
-    history = await db.load_history(limit=1)
-    if history:
-        last = history[-1]
-        return {
-            "digest_html": last.get("digest_html", last.get("digest", "")),
-            "personal_html": "",
-            "stats_html": "",
-            "posts_count": last["posts_count"],
-        }
-    return {"digest_html": "Ошибка: дайджест не сохранён", "personal_html": "", "stats_html": "", "posts_count": 0}
+    # Step 2 — scrape in parallel
+    await _status(_DIGEST_STATUS["scrape"])
+    results = await asyncio.gather(
+        *[scrape_channel(ch) for ch in channels],
+        return_exceptions=True,
+    )
+    posts = []
+    for ch, result in zip(channels, results):
+        if isinstance(result, Exception):
+            logger.warning(f"[digest] scrape failed: {ch}: {result}")
+        else:
+            posts.extend(result)
+    logger.info(f"[digest] scraped {len(posts)} posts from {len(channels)} channels")
+
+    # Step 3 — filter ads
+    await _status(_DIGEST_STATUS["filter"])
+    key = os.getenv("OPENROUTER_KEY")
+    filtered = await filter_ads(posts, key)
+    logger.info(f"[digest] after ad-filter: {len(filtered)} posts")
+
+    # Step 4 — generate digest
+    await _status(_DIGEST_STATUS["generate"])
+    user_data = data.copy()
+    user_data["openrouter_key"] = key
+    recent = await db.load_history(limit=3)
+    logger.info(f"[digest] generating | posts={len(filtered)} | model={user_data.get('model', '?')}")
+    digest_html, personal_html, stats_html = await generate_digest(
+        filtered, user_data, recent_digests=recent
+    )
+    logger.info(f"[digest] generated  | digest_len={len(digest_html)} | personal={'yes' if personal_html else 'no'}")
+
+    # Step 5 — save to history
+    await _status(_DIGEST_STATUS["save"])
+    await db.append_to_history(digest_html, len(filtered))
+    logger.info(f"[digest] done | posts_count={len(filtered)}")
+
+    return {
+        "digest_html": digest_html,
+        "personal_html": personal_html or "",
+        "stats_html": stats_html or "",
+        "posts_count": len(filtered),
+    }
 
 
 async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
     """
-    Run one chat turn with tool call logging.
-    checkpointer lifecycle managed in bot.py post_init/post_shutdown.
+    Run one chat turn. checkpointer lifecycle managed in bot.py post_init/post_shutdown.
     """
     data = await db.load()
     user_data = data.copy()
@@ -287,23 +196,36 @@ async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
     agent = create_chat_agent(system_prompt, checkpointer)
     config = {"configurable": {"thread_id": str(user_id)}}
 
+    logger.info(f"[chat_agent] turn start | user={user_id} | msg={message[:80]!r}")
     final_text = "Не смог ответить."
-    async for event in agent.astream_events(
-        {"messages": [{"role": "user", "content": message}]},
-        config,
-        version="v2",
-    ):
-        kind = event.get("event")
-        if kind == "on_tool_start":
-            tool_name = event.get("name", "")
-            label = _CHAT_TOOL_LABELS.get(tool_name, tool_name)
-            logger.info(f"[chat_agent] tool_start: {tool_name}")
-        elif kind == "on_tool_end":
-            logger.info(f"[chat_agent] tool_end:   {event.get('name', '')}")
-        elif kind == "on_chat_model_end":
-            # Capture final AI message
-            output = event.get("data", {}).get("output")
-            if output and hasattr(output, "content") and output.content:
-                final_text = output.content
+    model_calls = 0
+    try:
+        async for event in agent.astream_events(
+            {"messages": [{"role": "user", "content": message}]},
+            config,
+            version="v2",
+        ):
+            kind = event.get("event")
+            if kind == "on_tool_start":
+                tool_name = event.get("name", "")
+                tool_input = event.get("data", {}).get("input", "")
+                logger.info(f"[chat_agent] tool_start: {tool_name} | input={str(tool_input)[:120]!r}")
+            elif kind == "on_tool_end":
+                tool_name = event.get("name", "")
+                tool_output = event.get("data", {}).get("output", "")
+                logger.info(f"[chat_agent] tool_end:   {tool_name} | output={str(tool_output)[:120]!r}")
+            elif kind == "on_chat_model_start":
+                model_calls += 1
+                msgs = event.get("data", {}).get("input", {}).get("messages", [])
+                logger.info(f"[chat_agent] model_call #{model_calls} | ctx_messages={len(msgs)}")
+            elif kind == "on_chat_model_end":
+                output = event.get("data", {}).get("output")
+                if output and hasattr(output, "content") and output.content:
+                    final_text = output.content
+                logger.info(f"[chat_agent] model_done  #{model_calls} | reply={final_text[:100]!r}")
+    except Exception as e:
+        logger.error(f"[chat_agent] error: {e}", exc_info=True)
+        return f"Ошибка агента: {e}"
 
+    logger.info(f"[chat_agent] turn end   | model_calls={model_calls} | reply_len={len(final_text)}")
     return final_text
