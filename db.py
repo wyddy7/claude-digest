@@ -31,18 +31,21 @@ async def init_pool(dsn: str) -> AsyncConnectionPool:
         min_size=1,
         max_size=5,
         open=False,
-        max_idle=120.0,   # recycle idle connections every 2 min (before Supabase idle-timeout drops them)
-        max_lifetime=600.0,
         kwargs={
             "connect_timeout": 10,
             "keepalives": 1,
-            "keepalives_idle": 30,   # send OS keepalive after 30s idle
+            "keepalives_idle": 30,
             "keepalives_interval": 5,
             "keepalives_count": 5,
         },
     )
     await _pool.open()
-    logger.info("DB pool opened")
+    # pool_available=0 right after open() — background worker hasn't handed the
+    # connection to the idle queue yet.  A warm-up query forces it through so
+    # subsequent pool.connection() calls return immediately instead of blocking.
+    async with _pool.connection() as conn:
+        await conn.execute("SELECT 1")
+    logger.info(f"DB pool opened and warmed up, stats={_pool.get_stats()}")
     return _pool
 
 
