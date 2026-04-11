@@ -500,7 +500,7 @@ async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _post_init(app: Application) -> None:
-    """Initialize DB pool and Supabase checkpointer at startup."""
+    """Initialize DB pool and in-memory checkpointer at startup."""
     if not SUPABASE_DB_URL:
         logger.error("SUPABASE_DB_URL not set — bot cannot start without database")
         raise RuntimeError("SUPABASE_DB_URL is required")
@@ -508,23 +508,16 @@ async def _post_init(app: Application) -> None:
     # DB pool for user_state and digests tables
     await db.init_pool(SUPABASE_DB_URL)
 
-    # LangGraph checkpointer for chat_agent memory
-    # NOTE: must keep a reference to the context manager (cm), not just the checkpointer.
-    # The cm owns the psycopg connection — if it gets GC'd, the connection closes immediately.
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    _cm = AsyncPostgresSaver.from_conn_string(SUPABASE_DB_URL)
-    checkpointer = await _cm.__aenter__()
-    await checkpointer.setup()
-    app.bot_data["checkpointer"] = checkpointer
-    app.bot_data["checkpointer_cm"] = _cm
-    logger.info("DB pool and checkpointer initialised")
+    # In-memory checkpointer for chat_agent thread history.
+    # MemorySaver is reset on restart — acceptable for a personal single-user bot.
+    # AsyncPostgresSaver was hanging on checkpointer.setup() against Supabase (SSL/timeout).
+    from langgraph.checkpoint.memory import MemorySaver
+    app.bot_data["checkpointer"] = MemorySaver()
+    logger.info("DB pool opened, checkpointer ready (MemorySaver)")
 
 
 async def _post_shutdown(app: Application) -> None:
-    """Close DB pool and checkpointer on shutdown."""
-    cm = app.bot_data.get("checkpointer_cm")
-    if cm:
-        await cm.__aexit__(None, None, None)
+    """Close DB pool on shutdown."""
     await db.close_pool()
     logger.info("DB connections closed")
 
