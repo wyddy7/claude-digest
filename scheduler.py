@@ -123,13 +123,14 @@ async def run_checkin():
 
 
 async def _run():
-    dsn = os.getenv("SUPABASE_DB_URL")
-    if not dsn:
-        logger.error("SUPABASE_DB_URL not set — scheduler cannot start without database")
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_KEY")
+    if not url or not key:
+        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
         return
 
-    await db.init_pool(dsn)
-    logger.info("DB pool opened")
+    await db.init_supabase(url, key)
+    logger.info("DB ready (supabase-py)")
 
     scheduler = AsyncIOScheduler(timezone=MOSCOW)
     scheduler.add_job(run_digest, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")

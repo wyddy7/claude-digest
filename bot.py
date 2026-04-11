@@ -48,6 +48,8 @@ CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 OWNER_ID = CHAT_ID
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 MOSCOW = pytz.timezone("Europe/Moscow")
 
 # Schedule — single source of truth for both bot.py and scheduler.py
@@ -365,14 +367,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     uid = update.effective_user.id if update.effective_user else "?"
     logger.info(f"[handle_text] uid={uid} text={text!r}")
-    import socket as _sock, time as _time
-    _t = _time.time()
-    try:
-        _s = _sock.create_connection(('aws-0-eu-west-1.pooler.supabase.com', 6543), timeout=5)
-        logger.info(f"[handle_text] TCP-6543 OK {_time.time()-_t:.2f}s")
-        _s.close()
-    except Exception as _e:
-        logger.info(f"[handle_text] TCP-6543 FAIL {_time.time()-_t:.2f}s: {_e}")
     data = await db.load()
     logger.debug(f"[handle_text] db.load() ok | channels={len(data.get('channels',[]))} focus={data.get('current_focus','')!r}")
     focus = data.get("current_focus", "")
@@ -511,20 +505,16 @@ async def cmd_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _post_init(app: Application) -> None:
-    """Initialize DB pool and in-memory checkpointer at startup."""
-    if not SUPABASE_DB_URL:
-        logger.error("SUPABASE_DB_URL not set — bot cannot start without database")
-        raise RuntimeError("SUPABASE_DB_URL is required")
+    """Initialize supabase client and in-memory checkpointer at startup."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
 
-    # DB pool for user_state and digests tables
-    await db.init_pool(SUPABASE_DB_URL)
+    await db.init_supabase(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-    # In-memory checkpointer for chat_agent thread history.
-    # MemorySaver is reset on restart — acceptable for a personal single-user bot.
-    # AsyncPostgresSaver was hanging on checkpointer.setup() against Supabase (SSL/timeout).
     from langgraph.checkpoint.memory import MemorySaver
     app.bot_data["checkpointer"] = MemorySaver()
-    logger.info("DB pool opened, checkpointer ready (MemorySaver)")
+    logger.info("DB ready (supabase-py), checkpointer ready (MemorySaver)")
 
 
 async def _post_shutdown(app: Application) -> None:
