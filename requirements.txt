@@ -1,7 +1,0 @@
-python-telegram-bot[job-queue]==21.6
-httpx
-beautifulsoup4
-openai
-python-dotenv
-pytz
-PyYAML
