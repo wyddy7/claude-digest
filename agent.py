@@ -15,7 +15,10 @@ import logging
 import os
 
 from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
+from deepagents.middleware.permissions import FilesystemPermission
+from langgraph.errors import GraphRecursionError
 
 import db
 from ai import build_system_prompt, filter_ads, generate_digest
@@ -25,6 +28,16 @@ from scraper import scrape_channel
 logger = logging.getLogger(__name__)
 
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+
+
+def _make_model() -> ChatOpenAI:
+    """ChatOpenAI pointed at OpenRouter — the standard LangChain/OpenRouter setup."""
+    return ChatOpenAI(
+        model="anthropic/claude-sonnet-4-6",
+        api_key=OPENROUTER_KEY,
+        base_url=OPENROUTER_BASE,
+    )
 
 
 # ─── digest_agent tools ───────────────────────────────────────────────────────
@@ -133,14 +146,15 @@ def _build_digest_system_prompt() -> str:
     cfg = load_personalization()
     profile = cfg.get("profile", {}).get("description", "")
     return (
-        "You are a personal digest curator agent. Your job:\n"
-        "1. Call get_configured_channels to get the channel list\n"
-        "2. Call scrape_all_channels with that list\n"
-        "3. Call filter_ads_tool on the scraped posts\n"
+        "You are a personal digest curator agent. Your ONLY job is to run these 5 steps in order:\n"
+        "1. Call get_configured_channels\n"
+        "2. Call scrape_all_channels with the returned list\n"
+        "3. Call filter_ads_tool on the posts\n"
         "4. Call generate_digest_tool on the filtered posts\n"
-        "5. Call save_digest_tool with the result\n"
-        "6. Return a summary: how many channels, posts scraped, posts after filter, digest generated.\n\n"
-        "Always follow this exact sequence. Do not skip steps.\n\n"
+        "5. Call save_digest_tool with digest_html and posts_count from step 4\n"
+        "Then respond with: channels count, posts scraped, posts after filter, done.\n\n"
+        "IMPORTANT: Do NOT use ls, read_file, write_file, glob, grep, execute, or any filesystem tools. "
+        "You have no filesystem access. Only use the 5 tools listed above.\n\n"
         f"User profile: {profile}"
     )
 
@@ -148,7 +162,7 @@ def _build_digest_system_prompt() -> str:
 def create_digest_agent():
     """Stateless agent for scheduled digest generation."""
     return create_deep_agent(
-        model="anthropic:claude-sonnet-4-6",
+        model=_make_model(),
         system_prompt=_build_digest_system_prompt(),
         tools=[
             get_configured_channels,
@@ -157,6 +171,11 @@ def create_digest_agent():
             generate_digest_tool,
             load_recent_digests_tool,
             save_digest_tool,
+        ],
+        # Deny all filesystem access — deepagents adds ls/read_file/etc by default,
+        # we don't want the agent wasting steps on filesystem exploration.
+        permissions=[
+            FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="deny"),
         ],
     )
 
@@ -171,7 +190,7 @@ def create_chat_agent(system_prompt: str, checkpointer):
         "Use get_current_focus to understand what the user is currently focused on."
     )
     return create_deep_agent(
-        model="anthropic:claude-sonnet-4-6",
+        model=_make_model(),
         system_prompt=system,
         tools=[
             search_digest_history,
@@ -209,26 +228,31 @@ async def run_digest_agent(on_status=None) -> dict:
     Saves result to DB, returns dict for sending.
     """
     agent = create_digest_agent()
-    config = {"configurable": {"thread_id": "digest-run"}}
+    # recursion_limit: each tool call = 2+ LangGraph steps; 5 tools + LLM rounds ~= 15-20 steps.
+    # Set 50 to have headroom without risk of infinite loops.
+    config = {"recursion_limit": 50, "configurable": {"thread_id": "digest-run"}}
 
-    async for event in agent.astream_events(
-        {"messages": [{"role": "user", "content": "Generate today's digest."}]},
-        config,
-        version="v2",
-    ):
-        kind = event.get("event")
-        if kind == "on_tool_start":
-            tool_name = event.get("name", "")
-            label = _DIGEST_TOOL_LABELS.get(tool_name)
-            logger.info(f"[digest_agent] tool_start: {tool_name}")
-            if label and on_status:
-                try:
-                    await on_status(label)
-                except Exception:
-                    pass
-        elif kind == "on_tool_end":
-            tool_name = event.get("name", "")
-            logger.info(f"[digest_agent] tool_end:   {tool_name}")
+    try:
+        async for event in agent.astream_events(
+            {"messages": [{"role": "user", "content": "Generate today's digest."}]},
+            config,
+            version="v2",
+        ):
+            kind = event.get("event")
+            if kind == "on_tool_start":
+                tool_name = event.get("name", "")
+                label = _DIGEST_TOOL_LABELS.get(tool_name)
+                logger.info(f"[digest_agent] tool_start: {tool_name}")
+                if label and on_status:
+                    try:
+                        await on_status(label)
+                    except Exception:
+                        pass
+            elif kind == "on_tool_end":
+                tool_name = event.get("name", "")
+                logger.info(f"[digest_agent] tool_end:   {tool_name}")
+    except GraphRecursionError:
+        logger.warning("[digest_agent] hit recursion limit — reading last saved digest")
 
     history = await db.load_history(limit=1)
     if history:

@@ -1,7 +1,13 @@
+import asyncio
 import logging
 import os
+import sys
 from datetime import datetime, timedelta
 from io import BytesIO
+
+# psycopg3 requires SelectorEventLoop on Windows (incompatible with ProactorEventLoop)
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import pytz
 from dotenv import load_dotenv
@@ -498,18 +504,22 @@ async def _post_init(app: Application) -> None:
     await db.init_pool(SUPABASE_DB_URL)
 
     # LangGraph checkpointer for chat_agent memory
+    # NOTE: must keep a reference to the context manager (cm), not just the checkpointer.
+    # The cm owns the psycopg connection — if it gets GC'd, the connection closes immediately.
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    checkpointer = await AsyncPostgresSaver.from_conn_string(SUPABASE_DB_URL).__aenter__()
+    _cm = AsyncPostgresSaver.from_conn_string(SUPABASE_DB_URL)
+    checkpointer = await _cm.__aenter__()
     await checkpointer.setup()
     app.bot_data["checkpointer"] = checkpointer
+    app.bot_data["checkpointer_cm"] = _cm
     logger.info("DB pool and checkpointer initialised")
 
 
 async def _post_shutdown(app: Application) -> None:
     """Close DB pool and checkpointer on shutdown."""
-    checkpointer = app.bot_data.get("checkpointer")
-    if checkpointer:
-        await checkpointer.__aexit__(None, None, None)
+    cm = app.bot_data.get("checkpointer_cm")
+    if cm:
+        await cm.__aexit__(None, None, None)
     await db.close_pool()
     logger.info("DB connections closed")
 
