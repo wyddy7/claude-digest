@@ -1,11 +1,15 @@
 """
-Async database layer using psycopg3.
-Replaces file-based data.json and digests_history.json.
+Sync database layer using psycopg3, run in a thread via asyncio.to_thread().
 
-Uses a direct per-query connection instead of a pool — avoids AsyncConnectionPool
-background-worker deadlocks with PTB's event loop and Supabase Session Pooler
-idle-timeout SSL EOFs. For a single-user bot the ~0.6s connection overhead per
-operation is acceptable.
+All public functions are async so callers (bot.py, scheduler.py) need no changes.
+Internally each function opens a fresh synchronous connection in a thread pool,
+executes the query, and closes the connection.
+
+Why not AsyncConnection?
+  psycopg.AsyncConnection.connect() blocks the asyncio event loop in the PTB
+  handler context (inside run_polling()). asyncio.wait_for() cannot fire because
+  the event loop thread itself is blocked by psycopg's internal SSL/TCP setup.
+  Moving to a thread frees the event loop completely.
 """
 
 import asyncio
@@ -32,11 +36,11 @@ async def init_pool(dsn: str) -> None:
     """Store DSN and verify connectivity. No pool created."""
     global _dsn
     _dsn = dsn
-    conn = await _connect()
-    cur = await conn.execute("SELECT 1")
-    await cur.fetchone()
-    await conn.close()
-    logger.info("DB connection verified (direct, no pool)")
+    def _check():
+        with psycopg.connect(_dsn, connect_timeout=10) as conn:
+            conn.execute("SELECT 1").fetchone()
+    await asyncio.to_thread(_check)
+    logger.info("DB connection verified (sync-in-thread, no pool)")
 
 
 async def close_pool() -> None:
@@ -44,51 +48,30 @@ async def close_pool() -> None:
     logger.info("DB connections closed")
 
 
-async def _connect() -> psycopg.AsyncConnection:
-    """Open a fresh connection with a hard asyncio timeout.
-
-    connect_timeout is a Postgres-protocol parameter (handshake level).
-    asyncio.wait_for is the Python-level guard — cancels the coroutine if
-    the TCP SYN itself hangs before the Postgres handshake even starts.
-    Retries once so a transient blip doesn't surface to the caller.
-    """
+def _connect_sync() -> psycopg.Connection:
+    """Open a synchronous psycopg connection. Runs inside a thread."""
     if not _dsn:
         raise RuntimeError("DB not initialised — call init_pool() first")
-
-    for attempt in range(2):
-        try:
-            conn = await asyncio.wait_for(
-                psycopg.AsyncConnection.connect(
-                    _dsn,
-                    connect_timeout=10,
-                    keepalives=1,
-                    keepalives_idle=30,
-                    keepalives_interval=5,
-                    keepalives_count=5,
-                ),
-                timeout=12,
-            )
-            if attempt > 0:
-                logger.info("DB connect succeeded on retry")
-            return conn
-        except asyncio.TimeoutError:
-            logger.error(f"DB connect timed out (attempt {attempt + 1}/2) — TCP or SSL hang")
-            if attempt == 1:
-                raise RuntimeError("DB connect timed out after 2 attempts") from None
-        except Exception as e:
-            logger.error(f"DB connect failed (attempt {attempt + 1}/2): {e}")
-            if attempt == 1:
-                raise
+    return psycopg.connect(
+        _dsn,
+        connect_timeout=10,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=5,
+        keepalives_count=5,
+    )
 
 
 # ─── user_state (replaces data.json) ─────────────────────────────────────────
 
 async def load() -> dict:
     """Load user state row (id=1). Returns dict with defaults if missing."""
-    async with await _connect() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("SELECT * FROM user_state WHERE id = 1")
-            row = await cur.fetchone()
+    def _do():
+        with _connect_sync() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT * FROM user_state WHERE id = 1")
+                return cur.fetchone()
+    row = await asyncio.to_thread(_do)
     if not row:
         return _defaults()
     return _row_to_state(row)
@@ -97,33 +80,35 @@ async def load() -> dict:
 async def save(data: dict) -> None:
     """Upsert user state (id=1)."""
     clean = _sanitize(data)
-    async with await _connect() as conn:
-        await conn.execute(
-            """
-            INSERT INTO user_state
-                (id, channels, current_focus, focus_auto_reset, model,
-                 last_digest, last_digest_time, interaction_history, updated_at)
-            VALUES (1, %s, %s, %s, %s, %s, %s, %s, now())
-            ON CONFLICT (id) DO UPDATE SET
-                channels            = EXCLUDED.channels,
-                current_focus       = EXCLUDED.current_focus,
-                focus_auto_reset    = EXCLUDED.focus_auto_reset,
-                model               = EXCLUDED.model,
-                last_digest         = EXCLUDED.last_digest,
-                last_digest_time    = EXCLUDED.last_digest_time,
-                interaction_history = EXCLUDED.interaction_history,
-                updated_at          = now()
-            """,
-            (
-                json.dumps(clean.get("channels", DEFAULT_CHANNELS)),
-                clean.get("current_focus", ""),
-                clean.get("focus_auto_reset", False),
-                clean.get("model", DEFAULT_MODEL),
-                clean.get("last_digest", ""),
-                clean.get("last_digest_time", ""),
-                json.dumps(clean.get("interaction_history", [])),
-            ),
-        )
+    def _do():
+        with _connect_sync() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_state
+                    (id, channels, current_focus, focus_auto_reset, model,
+                     last_digest, last_digest_time, interaction_history, updated_at)
+                VALUES (1, %s, %s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (id) DO UPDATE SET
+                    channels            = EXCLUDED.channels,
+                    current_focus       = EXCLUDED.current_focus,
+                    focus_auto_reset    = EXCLUDED.focus_auto_reset,
+                    model               = EXCLUDED.model,
+                    last_digest         = EXCLUDED.last_digest,
+                    last_digest_time    = EXCLUDED.last_digest_time,
+                    interaction_history = EXCLUDED.interaction_history,
+                    updated_at          = now()
+                """,
+                (
+                    json.dumps(clean.get("channels", DEFAULT_CHANNELS)),
+                    clean.get("current_focus", ""),
+                    clean.get("focus_auto_reset", False),
+                    clean.get("model", DEFAULT_MODEL),
+                    clean.get("last_digest", ""),
+                    clean.get("last_digest_time", ""),
+                    json.dumps(clean.get("interaction_history", [])),
+                ),
+            )
+    await asyncio.to_thread(_do)
 
 
 def _defaults() -> dict:
@@ -176,17 +161,19 @@ async def add_history(entry: str) -> None:
 
 async def load_history(limit: int = 0) -> list[dict]:
     """Load digest history. limit=0 means all, newest first."""
-    async with await _connect() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            if limit:
-                await cur.execute(
-                    "SELECT * FROM digests ORDER BY id DESC LIMIT %s", (limit,)
-                )
-                rows = await cur.fetchall()
-                return list(reversed(rows))
-            else:
-                await cur.execute("SELECT * FROM digests ORDER BY id DESC")
-                return await cur.fetchall()
+    def _do():
+        with _connect_sync() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                if limit:
+                    cur.execute(
+                        "SELECT * FROM digests ORDER BY id DESC LIMIT %s", (limit,)
+                    )
+                    rows = cur.fetchall()
+                    return list(reversed(rows))
+                else:
+                    cur.execute("SELECT * FROM digests ORDER BY id DESC")
+                    return cur.fetchall()
+    return await asyncio.to_thread(_do)
 
 
 async def append_to_history(digest_html: str, posts_count: int) -> None:
@@ -195,11 +182,13 @@ async def append_to_history(digest_html: str, posts_count: int) -> None:
     moscow = pytz.timezone("Europe/Moscow")
     now_msk = datetime.now(moscow)
     is_error = digest_html.startswith("Ошибка") or digest_html.startswith("Не нашёл")
-    async with await _connect() as conn:
-        await conn.execute(
-            """
-            INSERT INTO digests (date, created_at, digest_html, posts_count, is_error)
-            VALUES (%s, now(), %s, %s, %s)
-            """,
-            (now_msk.strftime("%Y-%m-%d"), digest_html, posts_count, is_error),
-        )
+    def _do():
+        with _connect_sync() as conn:
+            conn.execute(
+                """
+                INSERT INTO digests (date, created_at, digest_html, posts_count, is_error)
+                VALUES (%s, now(), %s, %s, %s)
+                """,
+                (now_msk.strftime("%Y-%m-%d"), digest_html, posts_count, is_error),
+            )
+    await asyncio.to_thread(_do)
