@@ -55,6 +55,24 @@ def _get_client(api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE)
 
 
+def _parse_llm_json(content: str | None) -> dict:
+    """
+    Robustly parse JSON from LLM output.
+    Handles: empty/None content, markdown code fences (```json...```), leading/trailing whitespace.
+    Raises ValueError with a clear message on failure.
+    """
+    if not content or not content.strip():
+        raise ValueError("Model returned empty content — response_format: json_object may be unsupported for this model")
+    text = content.strip()
+    # Strip markdown code fences if present
+    if text.startswith("```"):
+        lines = text.splitlines()
+        # drop first line (```json or ```) and last line (```)
+        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+        text = "\n".join(inner).strip()
+    return json.loads(text)
+
+
 # ─── Prompt helpers ──────────────────────────────────────────────────────────
 
 def _render_rule_block(items: list[str], empty_value: str = "- нет") -> str:
@@ -257,28 +275,32 @@ async def generate_digest(
     system = build_system_prompt(user_data, recent_digests)
     client = _get_client(api_key)
 
-    try:
-        resp = await client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
-        data = json.loads(resp.choices[0].message.content)
-        result = DigestResult.model_validate(data)
-        stats = _to_html_stats(
-            posts_checked=len(posts),
-            channels_count=len({p["channel"] for p in posts}),
-            sources_selected=len(result.sources),
-        )
-        return _to_html_digest(result), _to_html_personal(result), stats
-    except Exception as e:
-        logger.error(f"digest generation error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return f"Ошибка генерации дайджеста: {e}", None, ""
+    for attempt in range(2):
+        try:
+            resp = await client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                # Do NOT pass response_format — Claude models via OpenRouter return empty
+                # content when this OpenAI-specific parameter is set. JSON is enforced via prompt.
+            )
+            raw = resp.choices[0].message.content
+            logger.debug(f"generate_digest raw response (attempt {attempt+1}): {str(raw)[:200]!r}")
+            data = _parse_llm_json(raw)
+            result = DigestResult.model_validate(data)
+            stats = _to_html_stats(
+                posts_checked=len(posts),
+                channels_count=len({p["channel"] for p in posts}),
+                sources_selected=len(result.sources),
+            )
+            return _to_html_digest(result), _to_html_personal(result), stats
+        except Exception as e:
+            logger.warning(f"generate_digest attempt {attempt+1} failed: {e}")
+            if attempt == 1:
+                logger.error(f"generate_digest: all attempts failed", exc_info=True)
+                return f"Ошибка генерации дайджеста: {e}", None, ""
 
 
 async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> list[bytes]:
