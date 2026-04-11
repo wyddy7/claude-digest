@@ -1,111 +1,87 @@
 """
-Sync database layer using psycopg3.
+Database layer using supabase-py HTTP client (PostgREST REST API).
 
-All public functions are declared async so callers need no changes,
-but internally every function calls psycopg synchronously, blocking
-the event loop for ~0.5s per call.
+Uses HTTPS → goes through HTTPS_PROXY → avoids libpq/psycopg SSL deadlock
+with PTB's httpx event loop. All functions are async and compatible with
+PTB's run_polling() event loop context.
 
-Why not async or asyncio.to_thread?
-  - AsyncConnection.connect() inside PTB's run_polling() context blocks
-    the event loop (SSL/TCP setup occupies the loop thread).
-  - asyncio.to_thread(): thread completes ("query done" logged) but
-    the future callback never fires back to the coroutine — PTB event
-    loop deadlock. Root cause unknown; likely PTB's internal executor
-    or context-vars interaction.
-  - Direct sync call: works. 0.5s event loop block is acceptable for
-    a single-user personal bot with no concurrent requests.
+Why not psycopg?
+  psycopg.connect() inside PTB's run_polling() handler hangs on SSL handshake
+  when httpx (PTB) already holds an active SSL tunnel through HTTPS_PROXY.
+  TCP connect succeeds (0.10s) but psycopg's full SSL/auth sequence deadlocks.
+  supabase-py uses httpx (same library as PTB) — works through proxy natively.
 """
 
 import json
 import logging
 from datetime import datetime
+from typing import Optional
 
-import psycopg
-from psycopg.rows import dict_row
+from supabase import AsyncClient, acreate_client
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
 
-# DSN set by init_pool(); used by every _connect() call
-_dsn: str = ""
+_client: Optional[AsyncClient] = None
 
 
 # ─── connection lifecycle ─────────────────────────────────────────────────────
 
 async def init_pool(dsn: str) -> None:
-    """Store DSN and verify connectivity."""
-    global _dsn
-    _dsn = dsn
-    with psycopg.connect(_dsn, connect_timeout=10) as conn:
-        conn.execute("SELECT 1").fetchone()
-    logger.info("DB connection verified (sync direct)")
+    """Ignored — supabase-py uses URL+key, not DSN. Call init_supabase() instead."""
+    logger.debug("init_pool: no-op (use init_supabase)")
+
+
+async def init_supabase(url: str, key: str) -> None:
+    """Create async supabase client and verify connectivity."""
+    global _client
+    _client = await acreate_client(url, key)
+    # Verify connectivity
+    resp = await _client.table("user_state").select("id").eq("id", 1).execute()
+    logger.info(f"DB connection verified (supabase-py HTTP, rows={len(resp.data)})")
 
 
 async def close_pool() -> None:
-    """No-op — no persistent pool to close."""
+    """Close supabase HTTP client."""
+    global _client
+    if _client:
+        await _client.aclose()
+        _client = None
     logger.info("DB connections closed")
 
 
-def _connect_sync() -> psycopg.Connection:
-    """Open a synchronous psycopg connection."""
-    if not _dsn:
-        raise RuntimeError("DB not initialised — call init_pool() first")
-    return psycopg.connect(
-        _dsn,
-        connect_timeout=10,
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=5,
-        keepalives_count=5,
-    )
+def _get_client() -> AsyncClient:
+    if _client is None:
+        raise RuntimeError("DB not initialised — call init_supabase() first")
+    return _client
 
 
 # ─── user_state (replaces data.json) ─────────────────────────────────────────
 
 async def load() -> dict:
     """Load user state row (id=1). Returns dict with defaults if missing."""
-    with _connect_sync() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT * FROM user_state WHERE id = 1")
-            row = cur.fetchone()
-    logger.debug("db.load done")
-    if not row:
+    resp = await _get_client().table("user_state").select("*").eq("id", 1).execute()
+    if not resp.data:
         return _defaults()
-    return _row_to_state(row)
+    return _row_to_state(resp.data[0])
 
 
 async def save(data: dict) -> None:
     """Upsert user state (id=1)."""
     clean = _sanitize(data)
-    with _connect_sync() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_state
-                (id, channels, current_focus, focus_auto_reset, model,
-                 last_digest, last_digest_time, interaction_history, updated_at)
-            VALUES (1, %s, %s, %s, %s, %s, %s, %s, now())
-            ON CONFLICT (id) DO UPDATE SET
-                channels            = EXCLUDED.channels,
-                current_focus       = EXCLUDED.current_focus,
-                focus_auto_reset    = EXCLUDED.focus_auto_reset,
-                model               = EXCLUDED.model,
-                last_digest         = EXCLUDED.last_digest,
-                last_digest_time    = EXCLUDED.last_digest_time,
-                interaction_history = EXCLUDED.interaction_history,
-                updated_at          = now()
-            """,
-            (
-                json.dumps(clean.get("channels", DEFAULT_CHANNELS)),
-                clean.get("current_focus", ""),
-                clean.get("focus_auto_reset", False),
-                clean.get("model", DEFAULT_MODEL),
-                clean.get("last_digest", ""),
-                clean.get("last_digest_time", ""),
-                json.dumps(clean.get("interaction_history", [])),
-            ),
-        )
+    payload = {
+        "id": 1,
+        "channels": clean.get("channels", DEFAULT_CHANNELS),
+        "current_focus": clean.get("current_focus", ""),
+        "focus_auto_reset": clean.get("focus_auto_reset", False),
+        "model": clean.get("model", DEFAULT_MODEL),
+        "last_digest": clean.get("last_digest", ""),
+        "last_digest_time": clean.get("last_digest_time", ""),
+        "interaction_history": clean.get("interaction_history", []),
+    }
+    await _get_client().table("user_state").upsert(payload).execute()
     logger.debug("db.save done")
 
 
@@ -135,11 +111,11 @@ def _row_to_state(row: dict) -> dict:
     history = row["interaction_history"] if isinstance(row["interaction_history"], list) else json.loads(row["interaction_history"])
     return {
         "channels": channels or DEFAULT_CHANNELS[:],
-        "current_focus": row["current_focus"] or "",
-        "focus_auto_reset": bool(row["focus_auto_reset"]),
-        "model": row["model"] or DEFAULT_MODEL,
-        "last_digest": row["last_digest"] or "",
-        "last_digest_time": row["last_digest_time"] or "",
+        "current_focus": row.get("current_focus") or "",
+        "focus_auto_reset": bool(row.get("focus_auto_reset")),
+        "model": row.get("model") or DEFAULT_MODEL,
+        "last_digest": row.get("last_digest") or "",
+        "last_digest_time": row.get("last_digest_time") or "",
         "interaction_history": history or [],
     }
 
@@ -159,17 +135,14 @@ async def add_history(entry: str) -> None:
 
 async def load_history(limit: int = 0) -> list[dict]:
     """Load digest history. limit=0 means all, newest first."""
-    with _connect_sync() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            if limit:
-                cur.execute(
-                    "SELECT * FROM digests ORDER BY id DESC LIMIT %s", (limit,)
-                )
-                rows = cur.fetchall()
-                return list(reversed(rows))
-            else:
-                cur.execute("SELECT * FROM digests ORDER BY id DESC")
-                return cur.fetchall()
+    q = _get_client().table("digests").select("*").order("id", desc=True)
+    if limit:
+        q = q.limit(limit)
+    resp = await q.execute()
+    rows = resp.data or []
+    if limit:
+        return list(reversed(rows))
+    return rows
 
 
 async def append_to_history(digest_html: str, posts_count: int) -> None:
@@ -178,12 +151,10 @@ async def append_to_history(digest_html: str, posts_count: int) -> None:
     moscow = pytz.timezone("Europe/Moscow")
     now_msk = datetime.now(moscow)
     is_error = digest_html.startswith("Ошибка") or digest_html.startswith("Не нашёл")
-    with _connect_sync() as conn:
-        conn.execute(
-            """
-            INSERT INTO digests (date, created_at, digest_html, posts_count, is_error)
-            VALUES (%s, now(), %s, %s, %s)
-            """,
-            (now_msk.strftime("%Y-%m-%d"), digest_html, posts_count, is_error),
-        )
+    await _get_client().table("digests").insert({
+        "date": now_msk.strftime("%Y-%m-%d"),
+        "digest_html": digest_html,
+        "posts_count": posts_count,
+        "is_error": is_error,
+    }).execute()
     logger.debug("db.append_to_history done")
