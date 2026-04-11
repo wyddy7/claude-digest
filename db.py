@@ -2,75 +2,65 @@
 Async database layer using psycopg3.
 Replaces file-based data.json and digests_history.json.
 
-Pool is initialized once in bot.py post_init and injected via module-level variable.
+Uses a direct per-query connection instead of a pool — avoids AsyncConnectionPool
+background-worker deadlocks with PTB's event loop and Supabase Session Pooler
+idle-timeout SSL EOFs. For a single-user bot the ~0.6s connection overhead per
+operation is acceptable.
 """
 
 import json
 import logging
-import os
 from datetime import datetime
 from typing import Optional
 
 import psycopg
 from psycopg.rows import dict_row
-from psycopg_pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
 DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
 
-# Module-level pool — set by init_pool(), used by all functions
-_pool: Optional[AsyncConnectionPool] = None
+# DSN set by init_pool(); used by every _connect() call
+_dsn: str = ""
 
 
-async def init_pool(dsn: str) -> AsyncConnectionPool:
-    global _pool
-    _pool = AsyncConnectionPool(
-        dsn,
-        min_size=1,
-        max_size=5,
-        open=False,
-        # Validate connection with SELECT 1 before handing it out — catches
-        # SSL EOF / stale connections from Supabase Session Pooler idle timeout.
-        check=AsyncConnectionPool.check_connection,
-        kwargs={
-            "connect_timeout": 10,
-            "keepalives": 1,
-            "keepalives_idle": 30,
-            "keepalives_interval": 5,
-            "keepalives_count": 5,
-        },
-    )
-    await _pool.open()
-    # pool_available=0 right after open() — background worker hasn't placed the
-    # connection in the idle queue yet.  Warm-up forces the full cycle so
-    # pool.connection() calls return immediately once polling starts.
-    async with _pool.connection() as conn:
-        await conn.execute("SELECT 1")
-    logger.info(f"DB pool ready, stats={_pool.get_stats()}")
-    return _pool
+# ─── connection lifecycle ─────────────────────────────────────────────────────
+
+async def init_pool(dsn: str) -> None:
+    """Store DSN and verify connectivity. No pool created."""
+    global _dsn
+    _dsn = dsn
+    conn = await _connect()
+    cur = await conn.execute("SELECT 1")
+    await cur.fetchone()
+    await conn.close()
+    logger.info("DB connection verified (direct, no pool)")
 
 
 async def close_pool() -> None:
-    global _pool
-    if _pool:
-        await _pool.close()
-        logger.info("DB pool closed")
+    """No-op — no persistent pool to close."""
+    logger.info("DB connections closed")
 
 
-def _pool_or_error() -> AsyncConnectionPool:
-    if _pool is None:
-        raise RuntimeError("DB pool not initialized — call init_pool() first")
-    return _pool
+async def _connect() -> psycopg.AsyncConnection:
+    if not _dsn:
+        raise RuntimeError("DB not initialised — call init_pool() first")
+    return await psycopg.AsyncConnection.connect(
+        _dsn,
+        connect_timeout=10,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=5,
+        keepalives_count=5,
+    )
 
 
 # ─── user_state (replaces data.json) ─────────────────────────────────────────
 
 async def load() -> dict:
     """Load user state row (id=1). Returns dict with defaults if missing."""
-    pool = _pool_or_error()
-    async with pool.connection() as conn:
+    async with await _connect() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute("SELECT * FROM user_state WHERE id = 1")
             row = await cur.fetchone()
@@ -82,8 +72,7 @@ async def load() -> dict:
 async def save(data: dict) -> None:
     """Upsert user state (id=1)."""
     clean = _sanitize(data)
-    pool = _pool_or_error()
-    async with pool.connection() as conn:
+    async with await _connect() as conn:
         await conn.execute(
             """
             INSERT INTO user_state
@@ -161,9 +150,8 @@ async def add_history(entry: str) -> None:
 # ─── digests (replaces digests_history.json) ──────────────────────────────────
 
 async def load_history(limit: int = 0) -> list[dict]:
-    """Load digest history. limit=0 means all."""
-    pool = _pool_or_error()
-    async with pool.connection() as conn:
+    """Load digest history. limit=0 means all, newest first."""
+    async with await _connect() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             if limit:
                 await cur.execute(
@@ -178,13 +166,11 @@ async def load_history(limit: int = 0) -> list[dict]:
 
 async def append_to_history(digest_html: str, posts_count: int) -> None:
     """Insert a new digest entry."""
-    from datetime import timezone
     import pytz
     moscow = pytz.timezone("Europe/Moscow")
     now_msk = datetime.now(moscow)
     is_error = digest_html.startswith("Ошибка") or digest_html.startswith("Не нашёл")
-    pool = _pool_or_error()
-    async with pool.connection() as conn:
+    async with await _connect() as conn:
         await conn.execute(
             """
             INSERT INTO digests (date, created_at, digest_html, posts_count, is_error)
