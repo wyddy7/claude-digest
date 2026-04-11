@@ -365,6 +365,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     uid = update.effective_user.id if update.effective_user else "?"
     logger.info(f"[handle_text] uid={uid} text={text!r}")
+    import socket as _sock, time as _time
+    _t = _time.time()
+    try:
+        _s = _sock.create_connection(('aws-0-eu-west-1.pooler.supabase.com', 6543), timeout=5)
+        logger.info(f"[handle_text] TCP-6543 OK {_time.time()-_t:.2f}s")
+        _s.close()
+    except Exception as _e:
+        logger.info(f"[handle_text] TCP-6543 FAIL {_time.time()-_t:.2f}s: {_e}")
     data = await db.load()
     logger.debug(f"[handle_text] db.load() ok | channels={len(data.get('channels',[]))} focus={data.get('current_focus','')!r}")
     focus = data.get("current_focus", "")
