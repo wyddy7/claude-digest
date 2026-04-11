@@ -44,16 +44,40 @@ async def close_pool() -> None:
 
 
 async def _connect() -> psycopg.AsyncConnection:
+    """Open a fresh connection with a hard asyncio timeout.
+
+    connect_timeout is a Postgres-protocol parameter (handshake level).
+    asyncio.wait_for is the Python-level guard — cancels the coroutine if
+    the TCP SYN itself hangs before the Postgres handshake even starts.
+    Retries once so a transient blip doesn't surface to the caller.
+    """
     if not _dsn:
         raise RuntimeError("DB not initialised — call init_pool() first")
-    return await psycopg.AsyncConnection.connect(
-        _dsn,
-        connect_timeout=10,
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=5,
-        keepalives_count=5,
-    )
+
+    for attempt in range(2):
+        try:
+            conn = await asyncio.wait_for(
+                psycopg.AsyncConnection.connect(
+                    _dsn,
+                    connect_timeout=10,
+                    keepalives=1,
+                    keepalives_idle=30,
+                    keepalives_interval=5,
+                    keepalives_count=5,
+                ),
+                timeout=12,
+            )
+            if attempt > 0:
+                logger.info("DB connect succeeded on retry")
+            return conn
+        except asyncio.TimeoutError:
+            logger.error(f"DB connect timed out (attempt {attempt + 1}/2) — TCP or SSL hang")
+            if attempt == 1:
+                raise RuntimeError("DB connect timed out after 2 attempts") from None
+        except Exception as e:
+            logger.error(f"DB connect failed (attempt {attempt + 1}/2): {e}")
+            if attempt == 1:
+                raise
 
 
 # ─── user_state (replaces data.json) ─────────────────────────────────────────
