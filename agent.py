@@ -30,13 +30,13 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
-def _make_model() -> ChatOpenAI:
+def _make_model(model: str = "deepseek/deepseek-chat") -> ChatOpenAI:
     """ChatOpenAI pointed at OpenRouter. Read key lazily so load_dotenv() order doesn't matter."""
     key = os.getenv("OPENROUTER_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_KEY env var is not set")
     return ChatOpenAI(
-        model="anthropic/claude-sonnet-4-6",
+        model=model,
         api_key=key,
         base_url=OPENROUTER_BASE,
     )
@@ -148,15 +148,17 @@ def _build_digest_system_prompt() -> str:
     cfg = load_personalization()
     profile = cfg.get("profile", {}).get("description", "")
     return (
-        "You are a personal digest curator agent. Your ONLY job is to run these 5 steps in order:\n"
+        "You are a personal digest curator agent. Run EXACTLY these 5 steps in order, ONCE each:\n"
         "1. Call get_configured_channels\n"
-        "2. Call scrape_all_channels with the returned list\n"
-        "3. Call filter_ads_tool on the posts\n"
-        "4. Call generate_digest_tool on the filtered posts\n"
+        "2. Call scrape_all_channels ONCE with that list — do NOT retry even if posts = []\n"
+        "3. Call filter_ads_tool with the posts list (pass [] if empty)\n"
+        "4. Call generate_digest_tool with the filtered posts (pass [] if empty)\n"
         "5. Call save_digest_tool with digest_html and posts_count from step 4\n"
-        "Then respond with: channels count, posts scraped, posts after filter, done.\n\n"
-        "IMPORTANT: Do NOT use ls, read_file, write_file, glob, grep, execute, or any filesystem tools. "
-        "You have no filesystem access. Only use the 5 tools listed above.\n\n"
+        "Then reply: channels N, posts scraped N, posts after filter N, saved.\n\n"
+        "CRITICAL RULES:\n"
+        "- Call each tool EXACTLY ONCE. Never retry.\n"
+        "- 0 posts is a valid result — proceed through ALL 5 steps anyway.\n"
+        "- Do NOT use ls, read_file, write_file, glob, grep, execute. No filesystem access.\n\n"
         f"User profile: {profile}"
     )
 

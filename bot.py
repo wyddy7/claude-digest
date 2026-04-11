@@ -141,8 +141,8 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
         else:
             try:
                 await status_msg.edit_text(text)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"status edit failed: {e}")
 
     await _update("⏳ Агент собирает дайджест...")
 
@@ -371,8 +371,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("state", None)
 
     if text == "📰 Дайджест":
-        status = await update.message.reply_text("⏳ Читаю каналы...", reply_markup=main_kb(focus))
-        await do_send_digest(context.bot, update.effective_chat.id, status_msg=status)
+        # Send status as plain bot.send_message (not a quoted reply) so it can be edited later.
+        # PTB 21 reply_text() creates a quoted reply which Telegram marks as non-editable.
+        await do_send_digest(context.bot, update.effective_chat.id)
         return
 
     if text == "📚 История":
