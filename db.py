@@ -8,6 +8,7 @@ idle-timeout SSL EOFs. For a single-user bot the ~0.6s connection overhead per
 operation is acceptable.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime
