@@ -152,7 +152,7 @@ async def load_history(limit: int = 0) -> list[dict]:
                 rows = await cur.fetchall()
                 return list(reversed(rows))
             else:
-                await cur.execute("SELECT * FROM digests ORDER BY id ASC")
+                await cur.execute("SELECT * FROM digests ORDER BY id DESC")
                 return await cur.fetchall()
 
 
