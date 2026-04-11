@@ -66,12 +66,23 @@ def _connect_sync() -> psycopg.Connection:
 
 async def load() -> dict:
     """Load user state row (id=1). Returns dict with defaults if missing."""
+    import threading
+    logger.info(f"db.load: before to_thread, loop={asyncio.get_event_loop()}")
     def _do():
-        with _connect_sync() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM user_state WHERE id = 1")
-                return cur.fetchone()
+        logger.info(f"db.load: _do started in thread={threading.current_thread().name}")
+        try:
+            with _connect_sync() as conn:
+                logger.info("db.load: connected")
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute("SELECT * FROM user_state WHERE id = 1")
+                    row = cur.fetchone()
+                    logger.info(f"db.load: query done, row={'found' if row else 'empty'}")
+                    return row
+        except Exception as e:
+            logger.error(f"db.load: exception in thread: {e}", exc_info=True)
+            raise
     row = await asyncio.to_thread(_do)
+    logger.info("db.load: to_thread returned")
     if not row:
         return _defaults()
     return _row_to_state(row)
