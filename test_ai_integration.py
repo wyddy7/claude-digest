@@ -105,7 +105,7 @@ try:
         "  Fact.\n"
         "  <i>Command: pip install x</i>\n"
     )
-    recent_digests = [{"date": "2026-03-30", "digest": html_digest_text, "is_error": False}]
+    recent_digests = [{"date": "2026-03-30", "digest_html": html_digest_text, "is_error": False}]
     user_data = {"current_focus": "AI agents", "interaction_history": ["msg1", "msg2"]}
     prompt = build_system_prompt(user_data, recent_digests)
     prev_section_match = re.search(

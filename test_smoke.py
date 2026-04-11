@@ -30,7 +30,7 @@ async def test_scraper():
 
 
 async def test_ai_digest(posts):
-    print("ai.generate_digest (pydantic-ai)...", end=" ")
+    print("ai.generate_digest...", end=" ")
     from ai import generate_digest
 
     data = {
