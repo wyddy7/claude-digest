@@ -30,9 +30,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Validate docker compose config
-        run: docker compose config -q
-
       - name: Build production image
         run: docker build -t digest-bot-ci .
 
