@@ -4,6 +4,10 @@ on:
   push:
     branches: [master]
 
+concurrency:
+  group: digest-bot-deploy-master
+  cancel-in-progress: true
+
 jobs:
   test:
     uses: ./.github/workflows/test.yml
@@ -11,6 +15,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
@@ -25,15 +30,35 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
+            set -euo pipefail
             cd ${{ secrets.DEPLOY_PATH }}
-            git pull origin master
+            git pull --ff-only origin master
+            docker compose config -q
             docker compose up -d --build
             docker image prune -f
-            sleep 5
-            RUNNING=$(docker compose ps --status running --services | wc -l)
+            sleep 10
+            RUNNING=$(docker compose ps --status running --services | wc -l | tr -d ' ')
             if [ "$RUNNING" -lt 2 ]; then
               echo "ERROR: expected 2 services running, got $RUNNING"
               docker compose logs --tail=50
               exit 1
             fi
-            echo "Deploy OK: $RUNNING services running"
+
+            timeout 90 bash -lc '
+              until docker compose logs --tail=200 digest-bot 2>&1 | grep -q "Bot started."; do
+                sleep 3
+              done
+            '
+
+            timeout 90 bash -lc '
+              until docker compose logs --tail=200 scheduler 2>&1 | grep -q "Scheduler started"; do
+                sleep 3
+              done
+            '
+
+            if docker compose logs --tail=200 digest-bot scheduler 2>&1 | grep -E "Traceback|Unhandled exception|ERROR:"; then
+              echo "ERROR: error signatures found in recent logs"
+              exit 1
+            fi
+
+            echo "Deploy OK: services running and startup markers detected"

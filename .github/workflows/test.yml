@@ -9,10 +9,12 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UV_CACHE_DIR: .uv-cache
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +22,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
 
       - name: Install uv
         run: pip install uv
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen
+
+      - name: Validate docker compose config
+        run: docker compose config -q
+
+      - name: Build production image
+        run: docker build -t digest-bot-ci .
 
       - name: Import check
         run: uv run python -c "import bot; import ai; import scraper; import agent; import db; print('imports OK')"
@@ -56,8 +64,8 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
         run: |
-          if [ -z "$OPENROUTER_KEY" ]; then
-            echo "Skipping full smoke test: OPENROUTER_KEY not set in GitHub Secrets"
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ] || [ -z "$OPENROUTER_KEY" ]; then
+            echo "Skipping full smoke test: BOT_TOKEN / CHAT_ID / OPENROUTER_KEY secret is missing"
             exit 0
           fi
           uv run test_smoke.py

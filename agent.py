@@ -26,6 +26,7 @@ from scraper import scrape_channel
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+CHAT_MAX_TOKENS = 1200
 
 
 def _make_model(role: str = "chat") -> ChatOpenAI:
@@ -39,6 +40,7 @@ def _make_model(role: str = "chat") -> ChatOpenAI:
         model=model_id,
         api_key=key,
         base_url=OPENROUTER_BASE,
+        max_tokens=CHAT_MAX_TOKENS,
     )
 
 
