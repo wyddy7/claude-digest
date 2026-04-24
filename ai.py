@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 AD_FILTER_MODEL = "deepseek/deepseek-chat"
+AD_FILTER_MAX_TOKENS = 250
+DIGEST_MAX_TOKENS = 1800
+VISION_FILTER_MAX_TOKENS = 5
 
 
 # ─── Pydantic schemas ────────────────────────────────────────────────────────
@@ -227,6 +230,7 @@ async def filter_ads(posts: list[dict], api_key: str, batch_size: int = 3) -> li
                     {"role": "user", "content": prompt},
                 ],
                 response_format={"type": "json_object"},
+                max_tokens=AD_FILTER_MAX_TOKENS,
                 temperature=0.0,
             )
             data = json.loads(resp.choices[0].message.content)
@@ -283,6 +287,7 @@ async def generate_digest(
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
+                max_tokens=DIGEST_MAX_TOKENS,
                 # Do NOT pass response_format — Claude models via OpenRouter return empty
                 # content when this OpenAI-specific parameter is set. JSON is enforced via prompt.
             )
@@ -337,7 +342,7 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
                         ],
                     }
                 ],
-                max_tokens=5,
+                max_tokens=VISION_FILTER_MAX_TOKENS,
                 temperature=0.0,
             )
             answer = resp.choices[0].message.content.strip().upper()
