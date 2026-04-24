@@ -9,7 +9,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  UV_CACHE_DIR: .uv-cache
+  UV_CACHE_DIR: /tmp/.uv-cache
 
 jobs:
   test:
@@ -19,19 +19,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore uv cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.uv-cache
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install uv
-        run: pip install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build production image
-        run: docker build -t digest-bot-ci .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: digest-bot-ci:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Import check
         run: uv run python -c "import bot; import ai; import scraper; import agent; import db; print('imports OK')"
