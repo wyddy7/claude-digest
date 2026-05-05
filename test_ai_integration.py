@@ -279,6 +279,65 @@ except Exception as e:
     traceback.print_exc()
 
 
+print("\n[10] _find_safe_cut: chat compaction boundary logic")
+try:
+    from agent import _find_safe_cut
+    from langchain_core.messages import (
+        AIMessage,
+        HumanMessage,
+        SystemMessage,
+        ToolMessage,
+    )
+
+    # Case 1: short history — no cut
+    msgs_short = []
+    for _ in range(5):
+        msgs_short.extend([HumanMessage(content="hi"), AIMessage(content="hello")])
+    check("compact_short_no_cut", _find_safe_cut(msgs_short, target_keep=10, slack=5) == -1)
+
+    # Case 2: long history with regular HumanMessage boundaries — must find one
+    msgs_long = []
+    for _ in range(20):
+        msgs_long.append(HumanMessage(content="q"))
+        msgs_long.append(AIMessage(content="a"))
+    cut = _find_safe_cut(msgs_long, target_keep=10, slack=5)
+    check("compact_returns_valid_cut", 0 < cut < len(msgs_long))
+    check("compact_cut_at_human_boundary", isinstance(msgs_long[cut], HumanMessage))
+    check("compact_tail_size_within_window",
+          abs(len(msgs_long) - cut - 10) <= 5)
+
+    # Case 3: tool-call pairs — tail must start on HumanMessage, never orphan ToolMessage
+    msgs_tools = []
+    for _ in range(8):
+        msgs_tools.extend([
+            HumanMessage(content="search for X"),
+            AIMessage(content="", tool_calls=[{"id": "t1", "name": "search", "args": {}}]),
+            ToolMessage(content="result", tool_call_id="t1"),
+            AIMessage(content="found"),
+        ])
+    cut_tools = _find_safe_cut(msgs_tools, target_keep=10, slack=5)
+    if cut_tools > 0:
+        check("compact_tail_starts_on_human", isinstance(msgs_tools[cut_tools], HumanMessage))
+    else:
+        check("compact_tools_returns_neg1_safely", cut_tools == -1)
+
+    # Case 4: no HumanMessage anywhere in cut window → -1
+    msgs_no_boundary = [SystemMessage(content="sys")] + [
+        AIMessage(content=f"a{i}") for i in range(40)
+    ]
+    check("compact_no_boundary_returns_neg1",
+          _find_safe_cut(msgs_no_boundary, target_keep=10, slack=5) == -1)
+
+    # Case 5: exactly target_keep messages — no cut needed
+    msgs_exact = [HumanMessage(content="x"), AIMessage(content="y")] * 5
+    check("compact_exact_target_no_cut",
+          _find_safe_cut(msgs_exact, target_keep=10, slack=5) == -1)
+except Exception as e:
+    FAIL.append("compact_logic")
+    print(f"  FAIL  compact_logic: {e}")
+    traceback.print_exc()
+
+
 print("\n" + "=" * 50)
 print(f"RESULTS: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

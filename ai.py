@@ -18,6 +18,7 @@ AD_FILTER_MODEL = "deepseek/deepseek-chat"
 AD_FILTER_MAX_TOKENS = 250
 DIGEST_MAX_TOKENS = 1800
 VISION_FILTER_MAX_TOKENS = 5
+SUMMARY_MAX_TOKENS = 400
 
 
 # ─── Pydantic schemas ────────────────────────────────────────────────────────
@@ -354,6 +355,41 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
             continue
 
     return approved
+
+
+async def summarize_chat_history(messages: list[dict], api_key: str) -> str:
+    """Compact prior chat turns into a short Russian summary for context fold-in."""
+    if not messages or not api_key:
+        return ""
+    client = _get_client(api_key)
+    convo_text = "\n".join(
+        f"[{m.get('role', '?')}]: {str(m.get('content', ''))[:600]}"
+        for m in messages
+        if str(m.get("content", "")).strip()
+    )
+    if not convo_text:
+        return ""
+    system = (
+        "Ты сжимаешь историю беседы между пользователем и AI-ассистентом по Telegram-дайджесту. "
+        "Сохрани только факты, которые могут понадобиться в дальнейшем разговоре: "
+        "темы, текущий фокус, упомянутые каналы, договорённости, открытые вопросы. "
+        "До 8 пунктов на русском, без воды и эмоций."
+    )
+    try:
+        resp = await client.chat.completions.create(
+            model=AD_FILTER_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"История:\n{convo_text}"},
+            ],
+            max_tokens=SUMMARY_MAX_TOKENS,
+            temperature=0.0,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        return text
+    except Exception as e:
+        logger.warning(f"summarize_chat_history failed: {e}")
+        return ""
 
 
 async def generate_weekly_recap(history_7days: list[dict]) -> str:
