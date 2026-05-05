@@ -11,8 +11,10 @@ Entry points:
 """
 
 import asyncio
+import difflib
 import logging
 import os
+import re
 
 from langchain_core.messages import HumanMessage, RemoveMessage
 from langchain_core.tools import tool
@@ -53,17 +55,55 @@ def _make_model(role: str = "chat") -> ChatOpenAI:
 
 # ─── chat_agent tools ─────────────────────────────────────────────────────────
 
+# Search tunables. Strict substring is tried first (fast path); if it misses,
+# token-level fuzzy is the fallback. Threshold values picked to catch typos
+# like "whispr" → "wispr" (ratio 0.83) without matching unrelated short words.
+SEARCH_TOKEN_MIN_LEN = 3
+SEARCH_FUZZY_TOKEN_RATIO = 0.75
+SEARCH_TOKEN_COVERAGE = 0.5
+
+
+def _matches_query(query: str, content: str) -> bool:
+    """
+    Decide whether `content` matches `query`. Strict substring is checked
+    first; on miss, fall back to token-level overlap with a per-token fuzzy
+    matcher to absorb typos and inflections. Pure function — kept testable
+    without DB.
+    """
+    if not query or not content:
+        return False
+    q = query.lower().strip()
+    c = content.lower()
+    if q in c:
+        return True
+    q_tokens = [t for t in re.split(r"\s+", q) if len(t) >= SEARCH_TOKEN_MIN_LEN]
+    if not q_tokens:
+        return False
+    content_words = re.findall(rf"\w{{{SEARCH_TOKEN_MIN_LEN},}}", c)
+    if not content_words:
+        return False
+    matched = 0
+    for tok in q_tokens:
+        if tok in c:
+            matched += 1
+            continue
+        for word in content_words:
+            if difflib.SequenceMatcher(None, tok, word).ratio() >= SEARCH_FUZZY_TOKEN_RATIO:
+                matched += 1
+                break
+    return matched / len(q_tokens) >= SEARCH_TOKEN_COVERAGE
+
+
 @tool
 async def search_digest_history(query: str) -> list[dict]:
     """Search past digests by keyword. Returns matching entries (date, snippet)."""
     history = await db.load_history()
-    q = query.lower()
     results = []
     for item in history:
         if item.get("is_error"):
             continue
         content = item.get("digest_html", "")
-        if q in content.lower():
+        if _matches_query(query, content):
             results.append({
                 "id": item.get("id"),
                 "date": item["date"],
