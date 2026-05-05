@@ -112,14 +112,22 @@ async def search_digest_history(query: str) -> list[dict]:
     return results[-10:]
 
 
+GET_RECENT_DIGESTS_PER_ITEM_CAP = 8000  # sanity bound, not a normal-case limit
+
+
 @tool
 async def get_recent_digests(n: int = 3) -> list[dict]:
     """Return the N most recent digest entries with date and content."""
     history = await db.load_history(limit=n)
-    # Keep digest text intact — chat-model context is large; truncating here
-    # is what caused the "no mention in history" hallucination on 2026-05-05.
+    # Truncating tool returns to 600 chars is what caused the 2026-05-05
+    # "no mention in history" miss. Cap is a sanity bound for pathological
+    # digests (~10x typical body), not a normal-case limit.
     return [
-        {"id": h.get("id"), "date": h["date"], "digest": h.get("digest_html", "")}
+        {
+            "id": h.get("id"),
+            "date": h["date"],
+            "digest": h.get("digest_html", "")[:GET_RECENT_DIGESTS_PER_ITEM_CAP],
+        }
         for h in history if not h.get("is_error")
     ]
 
