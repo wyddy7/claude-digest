@@ -20,6 +20,12 @@ DIGEST_MAX_TOKENS = 1800
 VISION_FILTER_MAX_TOKENS = 5
 SUMMARY_MAX_TOKENS = 400
 
+# System-prompt fold-in of recent digests for the chat agent.
+# Latest digest is kept verbatim — chat questions usually reference what the
+# user just received. Older digests are truncated for skim only.
+RECENT_DIGEST_LATEST_LIMIT = 4000
+RECENT_DIGEST_OLDER_LIMIT = 1500
+
 
 # ─── Pydantic schemas ────────────────────────────────────────────────────────
 
@@ -108,12 +114,12 @@ def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = Non
         def _strip_html(text: str) -> str:
             return re.sub(r"<[^>]+>", "", text).strip()
 
+        window = [d for d in recent_digests[-3:] if not d.get("is_error")]
         prev_lines = []
-        for digest in recent_digests[-3:]:
-            if digest.get("is_error"):
-                continue
+        for idx, digest in enumerate(window):
             clean = _strip_html(digest.get("digest_html", ""))
-            prev_lines.append(f"[{digest['date']}]\n{clean[:600]}")
+            limit = RECENT_DIGEST_LATEST_LIMIT if idx == len(window) - 1 else RECENT_DIGEST_OLDER_LIMIT
+            prev_lines.append(f"[{digest['date']}]\n{clean[:limit]}")
         if prev_lines:
             prev = "ПРЕДЫДУЩИЕ ДАЙДЖЕСТЫ:\n" + "\n\n".join(prev_lines)
 
