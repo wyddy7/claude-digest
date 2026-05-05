@@ -271,7 +271,8 @@ async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
     data = await db.load()
     user_data = data.copy()
     user_data["openrouter_key"] = os.getenv("OPENROUTER_KEY")
-    system_prompt = build_system_prompt(user_data)
+    recent = await db.load_history(limit=3)
+    system_prompt = build_system_prompt(user_data, recent_digests=recent)
     agent = create_chat_agent(system_prompt, checkpointer)
     config = {"configurable": {"thread_id": str(user_id)}}
 
