@@ -122,6 +122,22 @@ try:
     check("contains_style_rules", any(s in prompt for s in ("STYLE RULES:", "СТИЛЬ:")))
     check("contains_source_selection", any(s in prompt for s in ("SOURCE SELECTION:", "ОТБОР ИСТОЧНИКОВ:")))
     check("contains_stop_words", any(s in prompt for s in ("STOP WORDS:", "СТОП-СЛОВА:")))
+
+    # Truncation regression check (chat-context-2): the latest digest must be
+    # carried verbatim when its body is longer than the old 600-char cap.
+    # Synthetic body: 2000 chars of filler with marker at position ~1100,
+    # which the previous code would have chopped.
+    long_filler = "ai_newz [03.05.2026]\n" + ("— filler line about models. " * 30)
+    marker = "Wispr Flow поднял $80M"
+    tail = " (more text continues to push body past the old 600-char cap.)"
+    long_body = (long_filler + "\nseeallochnaya [03.05.2026]\n— " + marker + tail).ljust(2000, ".")
+    assert long_body.find(marker) > 700, "marker should be past old 600-char cutoff"
+    long_recent = [
+        {"date": "2026-05-04", "digest_html": "<b>old</b> placeholder", "is_error": False},
+        {"date": "2026-05-05", "digest_html": long_body, "is_error": False},
+    ]
+    long_prompt = build_system_prompt(user_data, long_recent)
+    check("latest_digest_preserves_marker_past_700_chars", marker in long_prompt)
 except Exception as e:
     FAIL.append("build_system_prompt")
     print(f"  FAIL  build_system_prompt: {e}")

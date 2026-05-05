@@ -76,8 +76,10 @@ async def search_digest_history(query: str) -> list[dict]:
 async def get_recent_digests(n: int = 3) -> list[dict]:
     """Return the N most recent digest entries with date and content."""
     history = await db.load_history(limit=n)
+    # Keep digest text intact — chat-model context is large; truncating here
+    # is what caused the "no mention in history" hallucination on 2026-05-05.
     return [
-        {"id": h.get("id"), "date": h["date"], "digest": h.get("digest_html", "")[:600]}
+        {"id": h.get("id"), "date": h["date"], "digest": h.get("digest_html", "")}
         for h in history if not h.get("is_error")
     ]
 
