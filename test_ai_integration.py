@@ -295,6 +295,43 @@ except Exception as e:
     traceback.print_exc()
 
 
+print("\n[11] _matches_query: fuzzy-token digest search")
+try:
+    from agent import _matches_query
+
+    digest_text = (
+        "ai_newz [04.05.2026]\n"
+        "— Xiaomi MiMo 2.5: миллион токенов контекста, мультимодальность.\n\n"
+        "seeallochnaya [05.05.2026]\n"
+        "— Wispr Flow поднял $80M, вырос в 100x за год, 270 компаний из Fortune 500\n"
+        "— Retention Wispr Flow на 6-й месяц — 80%\n"
+        "— AquaVoice (voice-to-text для десктопа) вышел в топ-1 Hacker News"
+    )
+    # Direct substring (current behavior, preserved)
+    check("match_exact_substring", _matches_query("Wispr Flow", digest_text))
+    check("match_exact_lowercase", _matches_query("wispr flow", digest_text))
+    check("match_exact_uppercase", _matches_query("WISPR FLOW", digest_text))
+
+    # The actual real-world failure: typo'd query that should still match
+    check("match_typo_extra_h", _matches_query("whispr flow", digest_text))
+    check("match_typo_single_token", _matches_query("whispr", digest_text))
+
+    # Other typos and partial queries
+    check("match_partial_word", _matches_query("aquavoice", digest_text))
+    check("match_substring_in_word", _matches_query("retention", digest_text))
+
+    # Negative cases — must not over-match
+    check("no_match_unrelated", not _matches_query("blockchain mining", digest_text))
+    check("no_match_empty_query", not _matches_query("", digest_text))
+    check("no_match_empty_content", not _matches_query("anything", ""))
+    # Short tokens are dropped (would otherwise fuzzy-match too much)
+    check("short_token_dropped", not _matches_query("xy", digest_text))
+except Exception as e:
+    FAIL.append("matches_query")
+    print(f"  FAIL  matches_query: {e}")
+    traceback.print_exc()
+
+
 print("\n[10] _find_safe_cut: chat compaction boundary logic")
 try:
     from agent import _find_safe_cut
