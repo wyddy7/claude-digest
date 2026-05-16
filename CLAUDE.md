@@ -83,6 +83,12 @@ debugging end-to-end behavior locally.
 - Tool-call pairs (`AIMessage(tool_calls=...)` →
   `ToolMessage(tool_call_id=...)`) must never be split.
   `_find_safe_cut` only allows boundaries before a `HumanMessage`.
+- `error_handler` filters `NetworkError`/`TimedOut` (without `update`)
+  to a single INFO line + blip counter — these are long-poll proxy
+  hiccups that PTB auto-retries internally. **Do not** revert to the
+  generic `logger.error("Unhandled exception", exc_info=...)` for
+  these — it floods logs with tracebacks for normal recovery. Real
+  unhandled exceptions still get traceback (`c2d1d9b`).
 
 ## Compaction tuning knobs
 
