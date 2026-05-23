@@ -6,3 +6,7 @@ config/personalization.yaml
 data/*.json
 data.json
 digests_history.json
+
+# scratch / debug logs (kept locally, ignored by git)
+log.md
+test1.md
