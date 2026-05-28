@@ -391,6 +391,60 @@ except Exception as e:
     traceback.print_exc()
 
 
+print("\n[12] _extract_external_urls: provenance allowlist")
+try:
+    from scraper import _extract_external_urls
+
+    html = """
+    <div class="tgme_widget_message">
+      <div class="tgme_widget_message_text">
+        Cool article <a href="https://example.com/post">here</a> and
+        <a href="https://news.ycombinator.com/item?id=1">HN</a>.
+        Our channel <a href="https://t.me/somechannel">t.me</a>.
+        Mail <a href="mailto:x@y.com">x</a>.
+      </div>
+    </div>
+    """
+    msg = BeautifulSoup(html, "html.parser").find("div", class_="tgme_widget_message")
+    urls = _extract_external_urls(msg)
+    check("ext_urls_keeps_external",
+          "https://example.com/post" in urls
+          and "https://news.ycombinator.com/item?id=1" in urls)
+    check("ext_urls_drops_tme", all("t.me/" not in u for u in urls))
+    check("ext_urls_drops_mailto", all(not u.startswith("mailto") for u in urls))
+    check("ext_urls_count_two", len(urls) == 2)
+
+    # order + dedupe preserved
+    html_dup = """
+    <div class="tgme_widget_message"><div class="tgme_widget_message_text">
+      <a href="https://a.com/1">a</a><a href="https://b.com/2">b</a><a href="https://a.com/1">a again</a>
+    </div></div>
+    """
+    msg_dup = BeautifulSoup(html_dup, "html.parser").find("div", class_="tgme_widget_message")
+    urls_dup = _extract_external_urls(msg_dup)
+    check("ext_urls_dedupe_order", urls_dup == ["https://a.com/1", "https://b.com/2"])
+
+    # no text_div → empty
+    html_none = """<div class="tgme_widget_message"></div>"""
+    msg_none = BeautifulSoup(html_none, "html.parser").find("div", class_="tgme_widget_message")
+    check("ext_urls_no_textdiv_empty", _extract_external_urls(msg_none) == [])
+
+    # self-link-only post → empty (aggregator self-references must not leak in)
+    html_self = """<div class="tgme_widget_message"><div class="tgme_widget_message_text"><a href="https://t.me/foo/1">x</a></div></div>"""
+    msg_self = BeautifulSoup(html_self, "html.parser").find("div", class_="tgme_widget_message")
+    check("ext_urls_self_only_empty", _extract_external_urls(msg_self) == [])
+
+    # cap respected
+    many = "".join(f'<a href="https://x.com/{i}">l</a>' for i in range(20))
+    html_cap = f'<div class="tgme_widget_message"><div class="tgme_widget_message_text">{many}</div></div>'
+    msg_cap = BeautifulSoup(html_cap, "html.parser").find("div", class_="tgme_widget_message")
+    check("ext_urls_cap_10", len(_extract_external_urls(msg_cap)) == 10)
+except Exception as e:
+    FAIL.append("_extract_external_urls")
+    print(f"  FAIL  _extract_external_urls: {e}")
+    traceback.print_exc()
+
+
 print("\n" + "=" * 50)
 print(f"RESULTS: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

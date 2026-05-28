@@ -25,6 +25,33 @@ def _extract_image_urls(msg) -> list[str]:
     return urls
 
 
+def _extract_external_urls(msg, cap: int = 10) -> list[str]:
+    """Return external http(s) links from a message's text body, in order, deduped.
+
+    This list is the provenance allowlist for the reader layer: only URLs that
+    actually appeared in a scraped post may later be fetched. Telegram
+    self-links (t.me/), tg://, mailto:, and in-page anchors are dropped.
+    """
+    text_div = msg.find("div", class_="tgme_widget_message_text")
+    if not text_div:
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for a in text_div.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        if href.lower().startswith(("https://t.me/", "http://t.me/")):
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+        urls.append(href)
+        if len(urls) >= cap:
+            break
+    return urls
+
+
 def _extract_author(msg) -> str:
     """Extract sender name — present in group chats, absent in channels."""
     for cls in ("tgme_widget_message_author_name", "tgme_widget_message_from_author"):
@@ -87,6 +114,16 @@ def _group_into_threads(raw: list[dict]) -> list[dict]:
         merged["text"] = combined[:2400]
         merged["is_thread"] = True
         merged["thread_size"] = len(thread)
+        # Union external_urls across the thread (provenance allowlist must
+        # cover every link the merged post visibly contains).
+        merged_urls: list[str] = []
+        seen_urls: set[str] = set()
+        for p in thread:
+            for u in p.get("external_urls", []):
+                if u not in seen_urls:
+                    seen_urls.add(u)
+                    merged_urls.append(u)
+        merged["external_urls"] = merged_urls
         result.append(merged)
         logger.debug(f"[{thread[0]['channel']}] merged {len(thread)} msgs into thread")
 
@@ -149,6 +186,7 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                     link = link_tag.get("href", "")
 
                 author = _extract_author(msg)
+                external_urls = _extract_external_urls(msg)
 
                 image_urls = _extract_image_urls(msg)
                 image_bytes: list[bytes] = []
@@ -167,6 +205,7 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                     "text": text[:1200],
                     "link": link,
                     "image_bytes": image_bytes,
+                    "external_urls": external_urls,
                     "time": post_time.isoformat(),
                 }
                 raw.append(post)
