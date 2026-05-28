@@ -1,9 +1,31 @@
-# Model IDs for each agent role (OpenRouter model strings).
-# Change here to switch models without touching code.
+# Per-stage model registry (OpenRouter model strings).
+# Two accepted forms:
+#   bare string                 -> model id only (back-compat)
+#   mapping {model_id, tier, rationale, task} -> model id + metadata that
+#       feeds the bot UI (/stages) and the docs (single source, no drift)
+# Change here to switch a stage's model without touching code.
 models:
-  chat: "anthropic/claude-sonnet-4.6"     # conversational chat agent
-  digest: "deepseek/deepseek-chat"         # digest orchestration (cheaper)
+  # Bare-string form (back-compat).
+  chat: "anthropic/claude-sonnet-4.6"      # conversational chat agent
+  digest: "deepseek/deepseek-chat"         # digest synthesis (overridden by user_state.model at runtime)
   vision: "openai/gpt-4o"                  # image understanding in scraper (not yet wired)
+
+  # Mapping form: cheap deterministic stages with metadata.
+  ad_filter:
+    model_id: "deepseek/deepseek-chat"
+    tier: cheap
+    rationale: "High-volume binary classification — cost-sensitive, no synthesis needed."
+    task: "Drop pure-ad posts before the digest is synthesized."
+  triage:
+    model_id: "deepseek/deepseek-chat"
+    tier: cheap
+    rationale: "One bounded decision over a link list — a cheap model is enough."
+    task: "Pick which external links in a post are worth opening (reader layer)."
+  summarize_link:
+    model_id: "deepseek/deepseek-chat"
+    tier: cheap
+    rationale: "Reserved for Grade-B per-link summarization; cheap by default."
+    task: "Summarize fetched article content (not used in the Grade-A MVP)."
 
 profile:
   description: |

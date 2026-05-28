@@ -107,8 +107,35 @@ def build_registry_from_state(user_data: dict, cfg_yaml: dict) -> ModelRegistry:
             default_rationale="High-volume binary classification — cost-sensitive.",
             default_task="Drop pure-ad posts before synthesis.",
         ),
+        "triage": stage_from_yaml(
+            models_cfg.get("triage"),
+            default_model=DEFAULT_CHEAP_MODEL,
+            default_tier="cheap",
+            default_rationale="One bounded decision over a link list — a cheap model is enough.",
+            default_task="Pick which external links in a post are worth opening (reader layer).",
+        ),
+        "summarize_link": stage_from_yaml(
+            models_cfg.get("summarize_link"),
+            default_model=DEFAULT_CHEAP_MODEL,
+            default_tier="cheap",
+            default_rationale="Reserved for Grade-B per-link summarization; cheap by default.",
+            default_task="Summarize fetched article content (not used in the Grade-A MVP).",
+        ),
     }
     return registry
+
+
+def describe_registry(registry: ModelRegistry) -> str:
+    """Render the per-stage registry as human-readable text (feeds bot UI + docs)."""
+    lines = []
+    for stage, sm in registry.items():
+        tier = f" [{sm.tier}]" if sm.tier else ""
+        lines.append(f"• {stage}{tier}: {sm.model_id}")
+        if sm.task:
+            lines.append(f"    {sm.task}")
+        if sm.rationale:
+            lines.append(f"    ↳ {sm.rationale}")
+    return "\n".join(lines)
 
 
 def build_pipeline_config(

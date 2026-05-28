@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta
+from html import escape
 from io import BytesIO
 
 # psycopg3 requires SelectorEventLoop on Windows (incompatible with ProactorEventLoop)
@@ -37,7 +38,12 @@ import httpx
 import db
 from agent import run_digest_pipeline, run_chat_turn
 from personalization import get_profile_description, load_personalization
-from pipeline_config import build_pipeline_config, make_openrouter_client
+from pipeline_config import (
+    build_pipeline_config,
+    build_registry_from_state,
+    describe_registry,
+    make_openrouter_client,
+)
 
 load_dotenv()
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -157,6 +163,16 @@ async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif update.message:
             await update.message.reply_text("⛔ Нет доступа")
         raise ApplicationHandlerStop
+
+
+async def cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Read-only view of the per-stage model registry (which model runs each
+    pipeline stage, and why). Metadata is sourced from the registry — the same
+    source the pipeline uses — so the UI never drifts from runtime behavior."""
+    data = await db.load()
+    registry = build_registry_from_state(data, load_personalization())
+    text = "🧩 <b>Модели по этапам пайплайна</b>\n\n" + escape(describe_registry(registry))
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def do_send_digest(bot, chat_id: int, status_msg=None):
@@ -585,6 +601,7 @@ def main():
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("in", cmd_in))
     app.add_handler(CommandHandler("next", cmd_next))
+    app.add_handler(CommandHandler("stages", cmd_stages))
 
     app.add_handler(CallbackQueryHandler(cb_model, pattern=r"^model\|"))
     app.add_handler(CallbackQueryHandler(cb_channels, pattern="^channels$"))
