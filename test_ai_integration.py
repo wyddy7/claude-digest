@@ -464,7 +464,9 @@ try:
     cfg_yaml = load_personalization()
 
     # --- registry mapping + metadata ---
-    cfg = build_pipeline_config({"model": "user/custom-model", "channels": []}, cfg_yaml)
+    # read_mode pinned explicitly so this test is independent of the ambient
+    # personalization.yaml (a local config may set read_mode: extract).
+    cfg = build_pipeline_config({"model": "user/custom-model", "channels": []}, cfg_yaml, read_mode="off")
     check("p2_read_mode_off_default", cfg.read_mode == "off")
     check("p2_digest_from_user_state", cfg.models["digest"].model_id == "user/custom-model")
     check("p2_ad_filter_default_cheap", cfg.models["ad_filter"].model_id == "deepseek/deepseek-chat")
