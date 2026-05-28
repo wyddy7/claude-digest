@@ -78,6 +78,26 @@ def _get_client(api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE)
 
 
+def record_usage(usage_log, stage: str, model: str, resp) -> None:
+    """Append one LLM call's token usage to usage_log (no-op if log is None or
+    the response carries no usage). OpenRouter populates resp.usage; fakes may
+    not. Never raises — instrumentation must not break the pipeline."""
+    if usage_log is None:
+        return
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return
+    try:
+        usage_log.append({
+            "stage": stage,
+            "model": model,
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        })
+    except Exception:
+        pass
+
+
 def _parse_llm_json(content: str | None) -> dict:
     """
     Robustly parse JSON from LLM output.
@@ -231,10 +251,11 @@ def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: in
 
 # ─── AI functions ─────────────────────────────────────────────────────────────
 
-async def filter_ads(posts: list[dict], *, client, model: str, batch_size: int = 3) -> list[dict]:
+async def filter_ads(posts: list[dict], *, client, model: str, batch_size: int = 3, usage_log=None) -> list[dict]:
     """Pre-filter posts: drop pure ads, keep posts with real signal.
 
     client + model are injected (DI) so this is testable offline.
+    usage_log: optional list — each LLM call's token usage is appended.
     """
     if not posts:
         return []
@@ -277,6 +298,7 @@ async def filter_ads(posts: list[dict], *, client, model: str, batch_size: int =
                 max_tokens=AD_FILTER_MAX_TOKENS,
                 temperature=0.0,
             )
+            record_usage(usage_log, "ad_filter", model, resp)
             data = json.loads(resp.choices[0].message.content)
             result = AdBatchResult.model_validate(data)
             labels = {lbl.index: lbl.is_ad for lbl in result.posts}
@@ -300,6 +322,7 @@ async def generate_digest(
     client,
     model: str,
     recent_digests: list[dict] | None = None,
+    usage_log=None,
 ) -> tuple[str, str | None, str]:
     if not posts:
         return "Не нашёл новых постов за последние 24 часа.", None, ""
@@ -335,6 +358,7 @@ async def generate_digest(
                 # Do NOT pass response_format — Claude models via OpenRouter return empty
                 # content when this OpenAI-specific parameter is set. JSON is enforced via prompt.
             )
+            record_usage(usage_log, "digest", model, resp)
             raw = resp.choices[0].message.content
             logger.debug(f"generate_digest raw response (attempt {attempt+1}): {str(raw)[:200]!r}")
             data = _parse_llm_json(raw)

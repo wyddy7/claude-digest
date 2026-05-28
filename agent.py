@@ -252,6 +252,27 @@ async def _compact_if_needed(agent, config) -> int | None:
 
 # ─── Entry points ─────────────────────────────────────────────────────────────
 
+def _build_cost_summary(config, usage_log: list[dict], reader_stats: dict | None) -> dict:
+    """Aggregate per-stage token usage + reader extraction stats so off-mode vs
+    extract-mode is empirically comparable. SaaS seam: tenant_id would key
+    per-tenant cost logging here (not implemented)."""
+    per_stage: dict[str, dict] = {}
+    for u in usage_log:
+        s = per_stage.setdefault(u["stage"], {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0})
+        s["prompt_tokens"] += u.get("prompt_tokens", 0)
+        s["completion_tokens"] += u.get("completion_tokens", 0)
+        s["calls"] += 1
+    rs = reader_stats or {}
+    return {
+        "read_mode": config.read_mode,
+        "per_stage_tokens": per_stage,
+        "extraction_attempted": rs.get("attempted", 0),
+        "extraction_ok": rs.get("ok", 0),
+        "urls_skipped_dedup": rs.get("urls_skipped_dedup", 0),
+        "urls_skipped_cap": rs.get("urls_skipped_cap", 0),
+    }
+
+
 async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=None, on_status=None) -> dict:
     """
     Run the digest pipeline directly — no agent overhead.
@@ -266,6 +287,8 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     """
     if llm_client is None:
         raise ValueError("run_digest_pipeline requires an llm_client (see pipeline_config.make_openrouter_client)")
+
+    usage_log: list[dict] = []  # per-LLM-call token usage, aggregated into cost_summary below
 
     async def _status(label: str):
         if on_status:
@@ -299,13 +322,16 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     if config.read_mode == READ_MODE_EXTRACT:
         await _status("📖 Читаю статьи по ссылкам...")
         reader_stats = await reader.read_posts(
-            posts, config=config, client=llm_client, fetcher=fetcher, db_module=db_module
+            posts, config=config, client=llm_client, fetcher=fetcher,
+            db_module=db_module, usage_log=usage_log,
         )
         logger.info(f"[digest] reader: {reader_stats}")
 
     # Step 3 — filter ads
     await _status(_DIGEST_STATUS["filter"])
-    filtered = await filter_ads(posts, client=llm_client, model=config.models["ad_filter"].model_id)
+    filtered = await filter_ads(
+        posts, client=llm_client, model=config.models["ad_filter"].model_id, usage_log=usage_log
+    )
     logger.info(f"[digest] after ad-filter: {len(filtered)} posts")
 
     # Step 4 — generate digest
@@ -315,13 +341,17 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     digest_model = config.models["digest"].model_id
     logger.info(f"[digest] generating | posts={len(filtered)} | model={digest_model}")
     digest_html, personal_html, stats_html = await generate_digest(
-        filtered, user_data, client=llm_client, model=digest_model, recent_digests=recent
+        filtered, user_data, client=llm_client, model=digest_model,
+        recent_digests=recent, usage_log=usage_log,
     )
     logger.info(f"[digest] generated  | digest_len={len(digest_html)} | personal={'yes' if personal_html else 'no'}")
 
     # Step 5 — save to history
     await _status(_DIGEST_STATUS["save"])
     await db_module.append_to_history(digest_html, len(filtered))
+
+    cost_summary = _build_cost_summary(config, usage_log, reader_stats)
+    logger.info(f"[digest] cost_summary: {cost_summary}")
     logger.info(f"[digest] done | posts_count={len(filtered)}")
 
     return {
@@ -329,6 +359,7 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
         "personal_html": personal_html or "",
         "stats_html": stats_html or "",
         "posts_count": len(filtered),
+        "cost_summary": cost_summary,
     }
 
 

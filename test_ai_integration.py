@@ -586,8 +586,9 @@ try:
         cfg, db_module=FakeDB(channels=[]), llm_client=fake2, fetcher=None
     ))
     check("p2_pipeline_dict_shape",
-          set(result.keys()) == {"digest_html", "personal_html", "stats_html", "posts_count"})
+          set(result.keys()) == {"digest_html", "personal_html", "stats_html", "posts_count", "cost_summary"})
     check("p2_pipeline_empty_zero_posts", result["posts_count"] == 0)
+    check("p2_pipeline_cost_summary_offmode", result["cost_summary"]["read_mode"] == "off")
     check("p2_pipeline_requires_llm_client",
           _raises(lambda: asyncio.run(run_digest_pipeline(cfg, db_module=FakeDB([]), llm_client=None))))
 except Exception as e:
@@ -833,6 +834,55 @@ try:
 except Exception as e:
     FAIL.append("reader_guardrails")
     print(f"  FAIL  reader_guardrails: {e}")
+    traceback.print_exc()
+
+
+print("\n[18] cost + extraction instrumentation: cost_summary")
+try:
+    from agent import _build_cost_summary
+    from ai import record_usage
+
+    class _Cfg:
+        def __init__(self, rm): self.read_mode = rm
+
+    # off baseline: no calls, no reader activity
+    cs_off = _build_cost_summary(_Cfg("off"), [], None)
+    check("p6_off_read_mode", cs_off["read_mode"] == "off")
+    check("p6_off_no_tokens", cs_off["per_stage_tokens"] == {})
+    check("p6_off_zero_extraction",
+          cs_off["extraction_attempted"] == 0 and cs_off["extraction_ok"] == 0)
+    check("p6_summary_shape",
+          set(cs_off.keys()) == {"read_mode", "per_stage_tokens", "extraction_attempted",
+                                  "extraction_ok", "urls_skipped_dedup", "urls_skipped_cap"})
+
+    # extract: per-stage aggregation across multiple calls + reader stats
+    usage_log = [
+        {"stage": "triage", "model": "m", "prompt_tokens": 100, "completion_tokens": 20},
+        {"stage": "ad_filter", "model": "m", "prompt_tokens": 50, "completion_tokens": 10},
+        {"stage": "ad_filter", "model": "m", "prompt_tokens": 40, "completion_tokens": 8},
+        {"stage": "digest", "model": "d", "prompt_tokens": 500, "completion_tokens": 300},
+    ]
+    rs = {"attempted": 3, "ok": 2, "urls_skipped_dedup": 1, "urls_skipped_cap": 0}
+    cs = _build_cost_summary(_Cfg("extract"), usage_log, rs)
+    check("p6_extract_read_mode", cs["read_mode"] == "extract")
+    check("p6_ad_filter_calls_aggregated", cs["per_stage_tokens"]["ad_filter"]["calls"] == 2)
+    check("p6_ad_filter_tokens_summed", cs["per_stage_tokens"]["ad_filter"]["prompt_tokens"] == 90)
+    check("p6_triage_tokens_reported", cs["per_stage_tokens"]["triage"]["prompt_tokens"] == 100)
+    check("p6_extraction_counts", cs["extraction_attempted"] == 3 and cs["extraction_ok"] == 2)
+    check("p6_dedup_skips_reported", cs["urls_skipped_dedup"] == 1)
+
+    # record_usage: appends when usage present, skips when absent, never raises
+    log = []
+    class _U: prompt_tokens = 7; completion_tokens = 3
+    class _RWith: usage = _U()
+    class _RWithout: usage = None
+    record_usage(log, "triage", "m", _RWith())
+    record_usage(log, "triage", "m", _RWithout())
+    record_usage(None, "triage", "m", _RWith())  # None log → no-op, no raise
+    check("p6_record_usage_appends", len(log) == 1 and log[0]["prompt_tokens"] == 7)
+except Exception as e:
+    FAIL.append("cost_instrumentation")
+    print(f"  FAIL  cost_instrumentation: {e}")
     traceback.print_exc()
 
 

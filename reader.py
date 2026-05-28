@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import trafilatura
 from bs4 import BeautifulSoup
 
-from ai import _parse_llm_json
+from ai import _parse_llm_json, record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ FETCH_TIMEOUT = 15
 _WRAPPER_HOSTS = {"readhacker.news"}
 
 
-async def triage_links(posts: list[dict], *, client, model: str) -> dict[str, list[str]]:
+async def triage_links(posts: list[dict], *, client, model: str, usage_log=None) -> dict[str, list[str]]:
     """One batched LLM call -> {post_index: [urls worth opening]}.
 
     The result is intersected with each post's external_urls (provenance): the
@@ -72,6 +72,7 @@ async def triage_links(posts: list[dict], *, client, model: str) -> dict[str, li
             max_tokens=TRIAGE_MAX_TOKENS,
             temperature=0.0,
         )
+        record_usage(usage_log, "triage", model, resp)
         data = _parse_llm_json(resp.choices[0].message.content)
     except Exception as e:
         logger.warning(f"[reader] triage failed, opening nothing: {e}")
@@ -184,7 +185,7 @@ async def _apply_dedup(capped: dict, *, db_module, window_days: int, stats: dict
     return fresh
 
 
-async def read_posts(posts: list[dict], *, config, client, fetcher, db_module=None) -> dict:
+async def read_posts(posts: list[dict], *, config, client, fetcher, db_module=None, usage_log=None) -> dict:
     """Orchestrate the Grade-A reader. Mutates posts in place, attaching
     post["read_content"] = [{url, final_url, text, ok}] for triaged links.
 
@@ -196,7 +197,9 @@ async def read_posts(posts: list[dict], *, config, client, fetcher, db_module=No
     """
     stats = {"attempted": 0, "ok": 0, "urls_skipped_dedup": 0, "urls_skipped_cap": 0}
 
-    selections = await triage_links(posts, client=client, model=config.models["triage"].model_id)
+    selections = await triage_links(
+        posts, client=client, model=config.models["triage"].model_id, usage_log=usage_log
+    )
     if not selections:
         return stats
 
