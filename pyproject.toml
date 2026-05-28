@@ -15,4 +15,5 @@ dependencies = [
     "langgraph>=0.4.0",
     "langgraph-checkpoint-postgres>=2.0.0",
     "supabase>=2.10.0",
+    "trafilatura>=2.0.0",
 ]
