@@ -22,8 +22,10 @@ from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
 
 import db
+import reader
 from ai import build_system_prompt, filter_ads, generate_digest, summarize_chat_history
 from personalization import load_personalization
+from pipeline_config import READ_MODE_EXTRACT
 from scraper import scrape_channel
 
 logger = logging.getLogger(__name__)
@@ -291,6 +293,15 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
         else:
             posts.extend(result)
     logger.info(f"[digest] scraped {len(posts)} posts from {len(channels)} channels")
+
+    # Step 2b — reader layer (Grade A): deep-read content behind post links.
+    reader_stats = None
+    if config.read_mode == READ_MODE_EXTRACT:
+        await _status("📖 Читаю статьи по ссылкам...")
+        reader_stats = await reader.read_posts(
+            posts, config=config, client=llm_client, fetcher=fetcher
+        )
+        logger.info(f"[digest] reader: {reader_stats}")
 
     # Step 3 — filter ads
     await _status(_DIGEST_STATUS["filter"])
