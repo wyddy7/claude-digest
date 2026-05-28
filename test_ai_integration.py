@@ -740,7 +740,7 @@ try:
     real_html = fixture.read_text(encoding="utf-8", errors="replace")
     real_text = _extract_content(real_html)
 
-    check("p14b_fixture_nonempty", len(real_text) > 3000)
+    check("p14b_fixture_nonempty", len(real_text) > 1000)
     check("p14b_budget_respected", len(real_text) <= EXTRACT_CHAR_BUDGET)
     low = real_text.lower()
     # key phrases from the article body (not site chrome) that must survive

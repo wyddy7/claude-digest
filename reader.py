@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 ENGINE = "grade_a"
 
 TRIAGE_MAX_TOKENS = 800
-EXTRACT_CHAR_BUDGET = 4000  # per-article cap folded into the digest prompt
+EXTRACT_CHAR_BUDGET = 1500  # per-article cap folded into the digest prompt — the
+# main cost lever: full bodies × many links blow up the digest prompt. The lead
+# ~300 words carry enough gist for digest bullets.
 FETCH_TIMEOUT = 15
 
 # Hosts that wrap a canonical article behind a redirect page. httpx follows
