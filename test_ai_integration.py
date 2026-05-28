@@ -744,6 +744,98 @@ except Exception as e:
     traceback.print_exc()
 
 
+print("\n[15] reader cost guardrails: per-channel cap + dedup + provenance")
+try:
+    import asyncio
+    import json as _json
+
+    import db as _db
+    from reader import read_posts as _read_posts
+    from pipeline_config import PipelineConfig, build_registry_from_state
+
+    # _url_hash is stable + collision-free for distinct urls
+    check("p5_url_hash_stable", _db._url_hash("https://a.com/x") == _db._url_hash("https://a.com/x"))
+    check("p5_url_hash_distinct", _db._url_hash("https://a.com/x") != _db._url_hash("https://a.com/y"))
+
+    class _Msg:
+        def __init__(self, c): self.content = c
+    class _Choice:
+        def __init__(self, c): self.message = _Msg(c)
+    class _Resp:
+        def __init__(self, c): self.choices = [_Choice(c)]
+    class _Comp:
+        def __init__(self, r): self._r = r
+        async def create(self, **kw): return _Resp(self._r(kw))
+    class _Chat:
+        def __init__(self, r): self.completions = _Comp(r)
+    class FakeClient:
+        def __init__(self, r): self.chat = _Chat(r)
+
+    _art = ("<html><body><article><p>"
+            + ("Substantial article body about distributed systems and caching strategies. " * 8)
+            + "</p></article></body></html>")
+    class _FResp:
+        def __init__(self, t, u): self.text = t; self.url = u
+    class FakeFetcher:
+        def __init__(self): self.gets = []
+        async def get(self, url, **kw):
+            self.gets.append(url)
+            return _FResp(_art, url)
+
+    class FakeDB:
+        def __init__(self, seen=()):
+            self._seen = set(seen); self.marked = []
+        def _url_hash(self, u): return u  # identity hash for readable assertions
+        async def get_seen_urls(self, hashes, window_days):
+            return {h for h in hashes if h in self._seen}
+        async def mark_urls_fetched(self, urls):
+            self.marked.extend(urls)
+
+    registry = build_registry_from_state({"model": "m"}, load_personalization())
+
+    def _mk_triage(urls):
+        return lambda kw: _json.dumps({"selections": [{"post_id": "0", "urls": urls}]})
+
+    # --- per-channel cap truncates ---
+    cfg_cap = PipelineConfig(read_mode="extract", models=registry,
+                             per_channel_link_cap=2, dedup_enabled=False)
+    posts_cap = [{"channel": "agg", "text": "t",
+                  "external_urls": ["https://x.com/1", "https://x.com/2", "https://x.com/3"]}]
+    f_cap = FakeFetcher()
+    st = asyncio.run(_read_posts(posts_cap, config=cfg_cap,
+                                 client=FakeClient(_mk_triage(["https://x.com/1", "https://x.com/2", "https://x.com/3"])),
+                                 fetcher=f_cap))
+    check("p5_cap_attempts_2", st["attempted"] == 2)
+    check("p5_cap_skips_1", st["urls_skipped_cap"] == 1)
+    check("p5_cap_fetched_2", len(f_cap.gets) == 2)
+
+    # --- dedup skips already-seen URL (fetcher never called for it) ---
+    cfg_dd = PipelineConfig(read_mode="extract", models=registry,
+                            per_channel_link_cap=20, dedup_enabled=True, dedup_window_days=7)
+    posts_dd = [{"channel": "agg", "text": "t",
+                 "external_urls": ["https://x.com/a", "https://x.com/b"]}]
+    f_dd = FakeFetcher()
+    fdb = FakeDB(seen={"https://x.com/b"})
+    st2 = asyncio.run(_read_posts(posts_dd, config=cfg_dd,
+                                  client=FakeClient(_mk_triage(["https://x.com/a", "https://x.com/b"])),
+                                  fetcher=f_dd, db_module=fdb))
+    check("p5_dedup_skips_seen", st2["urls_skipped_dedup"] == 1)
+    check("p5_dedup_fetches_only_fresh", f_dd.gets == ["https://x.com/a"])
+    check("p5_dedup_marks_fetched", fdb.marked == ["https://x.com/a"])
+
+    # --- provenance: a hallucinated URL is never fetched ---
+    posts_pv = [{"channel": "agg", "text": "t", "external_urls": ["https://x.com/real"]}]
+    f_pv = FakeFetcher()
+    asyncio.run(_read_posts(posts_pv, config=cfg_cap,
+                            client=FakeClient(_mk_triage(["https://x.com/real", "https://evil.com/inject"])),
+                            fetcher=f_pv))
+    check("p5_provenance_blocks_hallucinated", all("evil.com" not in u for u in f_pv.gets))
+except Exception as e:
+    FAIL.append("reader_guardrails")
+    print(f"  FAIL  reader_guardrails: {e}")
+    traceback.print_exc()
+
+
 print("\n[16] reader: <article> isolation + injection rule")
 try:
     # extracted text folds into the prompt as delimited <article> DATA

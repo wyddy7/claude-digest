@@ -12,9 +12,10 @@ Why not psycopg?
   supabase-py uses httpx (same library as PTB) — works through proxy natively.
 """
 
+import hashlib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from supabase import AsyncClient, create_async_client
@@ -158,3 +159,42 @@ async def append_to_history(digest_html: str, posts_count: int) -> None:
         "is_error": is_error,
     }).execute()
     logger.debug("db.append_to_history done")
+
+
+# ─── link_cache (reader dedup) ────────────────────────────────────────────────
+
+def _url_hash(url: str) -> str:
+    """Stable sha256 hex of a URL — the link_cache primary key."""
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
+async def get_seen_urls(url_hashes: list[str], window_days: int) -> set[str]:
+    """Return the subset of url_hashes fetched within the last window_days.
+
+    Single batched PostgREST query (no psycopg). Empty input → empty set.
+    """
+    if not url_hashes:
+        return set()
+    cutoff = (datetime.utcnow() - timedelta(days=window_days)).strftime("%Y-%m-%d")
+    resp = await (
+        _get_client()
+        .table("link_cache")
+        .select("url_hash")
+        .in_("url_hash", url_hashes)
+        .gte("last_fetched_date", cutoff)
+        .execute()
+    )
+    return {row["url_hash"] for row in (resp.data or [])}
+
+
+async def mark_urls_fetched(urls: list[str]) -> None:
+    """Upsert (url_hash → today) for each successfully fetched URL."""
+    if not urls:
+        return
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    rows = [
+        {"url_hash": _url_hash(u), "url": u, "last_fetched_date": today}
+        for u in dict.fromkeys(urls)  # dedupe preserving order
+    ]
+    await _get_client().table("link_cache").upsert(rows).execute()
+    logger.debug(f"db.mark_urls_fetched: {len(rows)} urls")

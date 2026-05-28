@@ -299,7 +299,7 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     if config.read_mode == READ_MODE_EXTRACT:
         await _status("📖 Читаю статьи по ссылкам...")
         reader_stats = await reader.read_posts(
-            posts, config=config, client=llm_client, fetcher=fetcher
+            posts, config=config, client=llm_client, fetcher=fetcher, db_module=db_module
         )
         logger.info(f"[digest] reader: {reader_stats}")
 

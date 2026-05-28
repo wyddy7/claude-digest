@@ -44,3 +44,16 @@ class UserState(Base):
     last_digest_time = Column(Text, nullable=False, default="")
     interaction_history = Column(JSONB, nullable=False, default=list)
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class LinkCache(Base):
+    """Dedup cache for the reader layer: a URL fetched within the dedup window
+    is skipped on subsequent daily runs. The structural advantage over an
+    in-memory cache is that the digest is daily, so a persistent date is enough."""
+
+    __tablename__ = "link_cache"
+
+    url_hash = Column(Text, primary_key=True)          # sha256 hex of the URL
+    url = Column(Text, nullable=False)                 # original URL (provenance/debug)
+    last_fetched_date = Column(Text, nullable=False)   # "YYYY-MM-DD" (MSK)
+    tenant_id = Column(Text, nullable=False, default="", server_default="")  # reserved — SaaS seam
