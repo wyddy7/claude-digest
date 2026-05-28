@@ -138,12 +138,61 @@ def extract_content(html: str) -> str:
     return text.strip()[:EXTRACT_CHAR_BUDGET]
 
 
-async def read_posts(posts: list[dict], *, config, client, fetcher) -> dict:
+def _apply_cap(selections: dict, posts: list[dict], cap: int, stats: dict) -> dict:
+    """Enforce a per-channel link cap across the triaged selections (cost
+    guardrail). Truncated links are counted in stats['urls_skipped_cap']."""
+    from collections import defaultdict
+
+    per_channel = defaultdict(int)
+    capped: dict[str, list[str]] = {}
+    for pid, urls in selections.items():
+        channel = posts[int(pid)].get("channel", "?")
+        kept = []
+        for u in urls:
+            if per_channel[channel] >= cap:
+                stats["urls_skipped_cap"] += 1
+                continue
+            per_channel[channel] += 1
+            kept.append(u)
+        if kept:
+            capped[pid] = kept
+    return capped
+
+
+async def _apply_dedup(capped: dict, *, db_module, window_days: int, stats: dict) -> dict:
+    """Drop links already fetched within the dedup window (cost guardrail).
+    Single batched query; failures are non-fatal (fetch proceeds)."""
+    all_urls = [u for urls in capped.values() for u in urls]
+    if not all_urls:
+        return capped
+    url_to_hash = {u: db_module._url_hash(u) for u in all_urls}
+    try:
+        seen = await db_module.get_seen_urls(list(url_to_hash.values()), window_days)
+    except Exception as e:
+        logger.warning(f"[reader] dedup lookup failed, proceeding without it: {e}")
+        return capped
+    fresh: dict[str, list[str]] = {}
+    for pid, urls in capped.items():
+        kept = []
+        for u in urls:
+            if url_to_hash[u] in seen:
+                stats["urls_skipped_dedup"] += 1
+            else:
+                kept.append(u)
+        if kept:
+            fresh[pid] = kept
+    return fresh
+
+
+async def read_posts(posts: list[dict], *, config, client, fetcher, db_module=None) -> dict:
     """Orchestrate the Grade-A reader. Mutates posts in place, attaching
     post["read_content"] = [{url, final_url, text, ok}] for triaged links.
 
+    Pipeline: triage (provenance) → per-channel cap → dedup → fetch (1 hop) →
+    extract. db_module (injected) backs the dedup cache; omit it to disable
+    dedup (offline tests, or dedup_enabled=False).
+
     Returns stats: {attempted, ok, urls_skipped_dedup, urls_skipped_cap}.
-    Dedup + per-channel cap filtering is layered in by P5.
     """
     stats = {"attempted": 0, "ok": 0, "urls_skipped_dedup": 0, "urls_skipped_cap": 0}
 
@@ -151,7 +200,15 @@ async def read_posts(posts: list[dict], *, config, client, fetcher) -> dict:
     if not selections:
         return stats
 
-    for pid, urls in selections.items():
+    capped = _apply_cap(selections, posts, config.per_channel_link_cap, stats)
+
+    if config.dedup_enabled and db_module is not None:
+        capped = await _apply_dedup(
+            capped, db_module=db_module, window_days=config.dedup_window_days, stats=stats
+        )
+
+    fetched_ok: list[str] = []
+    for pid, urls in capped.items():
         post = posts[int(pid)]
         read_content = []
         for url in urls:
@@ -162,11 +219,18 @@ async def read_posts(posts: list[dict], *, config, client, fetcher) -> dict:
                 ok = bool(text)
                 if ok:
                     stats["ok"] += 1
+                    fetched_ok.append(url)
                 read_content.append({"url": url, "final_url": final_url, "text": text, "ok": ok})
             except Exception as e:
                 logger.warning(f"[reader] fetch/extract failed for {url}: {e}")
                 read_content.append({"url": url, "final_url": url, "text": "", "ok": False})
         post["read_content"] = read_content
+
+    if config.dedup_enabled and db_module is not None and fetched_ok:
+        try:
+            await db_module.mark_urls_fetched(fetched_ok)
+        except Exception as e:
+            logger.warning(f"[reader] mark_urls_fetched failed (non-fatal): {e}")
 
     logger.info(f"[reader] {ENGINE}: {stats}")
     return stats
