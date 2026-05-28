@@ -32,9 +32,12 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
+import httpx
+
 import db
 from agent import run_digest_pipeline, run_chat_turn
-from personalization import get_profile_description
+from personalization import get_profile_description, load_personalization
+from pipeline_config import build_pipeline_config, make_openrouter_client
 
 load_dotenv()
 _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -169,7 +172,14 @@ async def do_send_digest(bot, chat_id: int, status_msg=None):
 
     await _update("⏳ Агент собирает дайджест...")
 
-    result = await run_digest_pipeline(on_status=_update)
+    cfg_data = await db.load()
+    cfg_yaml = load_personalization()
+    config = build_pipeline_config(cfg_data, cfg_yaml)
+    llm_client = make_openrouter_client(OPENROUTER_KEY)
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
+        result = await run_digest_pipeline(
+            config, llm_client=llm_client, fetcher=fetcher, on_status=_update
+        )
 
     digest_html = result["digest_html"]
     personal_html = result.get("personal_html", "")

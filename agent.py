@@ -250,13 +250,21 @@ async def _compact_if_needed(agent, config) -> int | None:
 
 # ─── Entry points ─────────────────────────────────────────────────────────────
 
-async def run_digest_pipeline(on_status=None) -> dict:
+async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=None, on_status=None) -> dict:
     """
     Run the digest pipeline directly — no agent overhead.
     Steps: load channels → scrape (parallel) → filter ads → generate → save.
-    on_status: async callable(text: str) — called before each step.
+
+    config:     PipelineConfig (read_mode, per-stage model registry, guardrails).
+    db_module:  injected db layer (defaults to the real db module).
+    llm_client: injected AsyncOpenAI-compatible client (built by the caller).
+    fetcher:    injected httpx client for the reader layer (used from P4).
+    on_status:  async callable(text: str) — called before each step.
     Returns dict: digest_html, personal_html, stats_html, posts_count.
     """
+    if llm_client is None:
+        raise ValueError("run_digest_pipeline requires an llm_client (see pipeline_config.make_openrouter_client)")
+
     async def _status(label: str):
         if on_status:
             try:
@@ -266,7 +274,7 @@ async def run_digest_pipeline(on_status=None) -> dict:
 
     # Step 1 — load channels
     await _status(_DIGEST_STATUS["channels"])
-    data = await db.load()
+    data = await db_module.load()
     channels = data.get("channels", [])
     logger.info(f"[digest] channels ({len(channels)}): {channels}")
 
@@ -286,24 +294,23 @@ async def run_digest_pipeline(on_status=None) -> dict:
 
     # Step 3 — filter ads
     await _status(_DIGEST_STATUS["filter"])
-    key = os.getenv("OPENROUTER_KEY")
-    filtered = await filter_ads(posts, key)
+    filtered = await filter_ads(posts, client=llm_client, model=config.models["ad_filter"].model_id)
     logger.info(f"[digest] after ad-filter: {len(filtered)} posts")
 
     # Step 4 — generate digest
     await _status(_DIGEST_STATUS["generate"])
     user_data = data.copy()
-    user_data["openrouter_key"] = key
-    recent = await db.load_history(limit=3)
-    logger.info(f"[digest] generating | posts={len(filtered)} | model={user_data.get('model', '?')}")
+    recent = await db_module.load_history(limit=3)
+    digest_model = config.models["digest"].model_id
+    logger.info(f"[digest] generating | posts={len(filtered)} | model={digest_model}")
     digest_html, personal_html, stats_html = await generate_digest(
-        filtered, user_data, recent_digests=recent
+        filtered, user_data, client=llm_client, model=digest_model, recent_digests=recent
     )
     logger.info(f"[digest] generated  | digest_len={len(digest_html)} | personal={'yes' if personal_html else 'no'}")
 
     # Step 5 — save to history
     await _status(_DIGEST_STATUS["save"])
-    await db.append_to_history(digest_html, len(filtered))
+    await db_module.append_to_history(digest_html, len(filtered))
     logger.info(f"[digest] done | posts_count={len(filtered)}")
 
     return {

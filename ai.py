@@ -196,12 +196,14 @@ def _to_html_stats(posts_checked: int, channels_count: int, sources_selected: in
 
 # ─── AI functions ─────────────────────────────────────────────────────────────
 
-async def filter_ads(posts: list[dict], api_key: str, batch_size: int = 3) -> list[dict]:
-    """Pre-filter posts: drop pure ads, keep posts with real signal."""
+async def filter_ads(posts: list[dict], *, client, model: str, batch_size: int = 3) -> list[dict]:
+    """Pre-filter posts: drop pure ads, keep posts with real signal.
+
+    client + model are injected (DI) so this is testable offline.
+    """
     if not posts:
         return []
 
-    client = _get_client(api_key)
     ad_system = (
         "Ты — строгий редактор технического дайджеста. "
         "Твоя задача: определить, является ли пост чистой рекламой.\n\n"
@@ -231,7 +233,7 @@ async def filter_ads(posts: list[dict], api_key: str, batch_size: int = 3) -> li
         )
         try:
             resp = await client.chat.completions.create(
-                model=AD_FILTER_MODEL,
+                model=model,
                 messages=[
                     {"role": "system", "content": ad_system},
                     {"role": "user", "content": prompt},
@@ -259,13 +261,14 @@ async def filter_ads(posts: list[dict], api_key: str, batch_size: int = 3) -> li
 async def generate_digest(
     posts: list[dict],
     user_data: dict,
+    *,
+    client,
+    model: str,
     recent_digests: list[dict] | None = None,
 ) -> tuple[str, str | None, str]:
     if not posts:
         return "Не нашёл новых постов за последние 24 часа.", None, ""
 
-    model_id = user_data.get("model", "anthropic/claude-3.5-haiku")
-    api_key = user_data["openrouter_key"]
     focus = user_data.get("current_focus", "")
     focus_line = f"\nФОКУС: «{focus}» — приоритизируй посты про это" if focus else ""
 
@@ -284,12 +287,11 @@ async def generate_digest(
     )
 
     system = build_system_prompt(user_data, recent_digests)
-    client = _get_client(api_key)
 
     for attempt in range(2):
         try:
             resp = await client.chat.completions.create(
-                model=model_id,
+                model=model,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
