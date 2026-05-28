@@ -1,3 +1,10 @@
+# Reader layer switch (deep-read behind post links). Runtime-controllable —
+# change here, no code edit/redeploy needed:
+#   off     — headlines only (today's behavior, default)
+#   extract — Grade A: one triage call picks links, then fetch + trafilatura
+#   agentic — Grade B (NOT IMPLEMENTED; the pipeline raises NotImplementedError)
+read_mode: "off"
+
 # Per-stage model registry (OpenRouter model strings).
 # Two accepted forms:
 #   bare string                 -> model id only (back-compat)

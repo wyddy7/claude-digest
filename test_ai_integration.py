@@ -472,6 +472,14 @@ try:
     check("p2_ad_filter_metadata_present", cfg.models["ad_filter"].tier == "cheap")
     check("p2_guardrail_defaults", cfg.per_channel_link_cap == 20 and cfg.dedup_enabled and cfg.tenant_id is None)
 
+    # --- read_mode switch resolution: yaml-driven, explicit arg overrides ---
+    check("p2_read_mode_from_yaml",
+          build_pipeline_config({}, {"read_mode": "extract"}).read_mode == "extract")
+    check("p2_read_mode_explicit_override",
+          build_pipeline_config({}, {"read_mode": "extract"}, read_mode="off").read_mode == "off")
+    check("p2_read_mode_missing_defaults_off",
+          build_pipeline_config({}, {}).read_mode == "off")
+
     # --- P3: all four stages resolve with metadata ---
     from pipeline_config import build_registry_from_state, describe_registry, stage_from_yaml
     reg = build_registry_from_state({"model": "user/m"}, cfg_yaml)

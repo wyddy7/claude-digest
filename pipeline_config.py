@@ -139,8 +139,14 @@ def describe_registry(registry: ModelRegistry) -> str:
 
 
 def build_pipeline_config(
-    user_data: dict, cfg_yaml: dict, read_mode: str = READ_MODE_OFF
+    user_data: dict, cfg_yaml: dict, read_mode: str | None = None
 ) -> PipelineConfig:
+    """Build the pipeline config. read_mode resolution order:
+    explicit arg > `read_mode:` in personalization.yaml > off (default).
+    This is the runtime switch for the reader layer — flip it in the yaml to
+    turn on extract-mode without a code change or redeploy."""
+    if read_mode is None:
+        read_mode = (cfg_yaml or {}).get("read_mode", READ_MODE_OFF)
     return PipelineConfig(
         read_mode=read_mode,
         models=build_registry_from_state(user_data, cfg_yaml),
