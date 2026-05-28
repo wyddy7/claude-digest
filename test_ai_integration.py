@@ -119,9 +119,9 @@ try:
     check("html_stripped_from_prev_digests", not has_html_tags)
     check("plain_text_survives_strip", "Insight" in prev_section)
     check("plain_text_command_survives", "pip install x" in prev_section)
-    check("contains_style_rules", any(s in prompt for s in ("STYLE RULES:", "СТИЛЬ:")))
-    check("contains_source_selection", any(s in prompt for s in ("SOURCE SELECTION:", "ОТБОР ИСТОЧНИКОВ:")))
-    check("contains_stop_words", any(s in prompt for s in ("STOP WORDS:", "СТОП-СЛОВА:")))
+    check("contains_style_rules", any(s in prompt for s in ("STYLE RULES:", "СТИЛЬ:", "СТИЛЬ ИЗЛОЖЕНИЯ")))
+    check("contains_source_selection", any(s in prompt for s in ("SOURCE SELECTION:", "ОТБОР ИСТОЧНИКОВ:", "КРИТЕРИИ СИГНАЛА")))
+    check("contains_stop_words", any(s in prompt for s in ("STOP WORDS:", "СТОП-СЛОВА:", "Стоп-фразы")))
 
     # Truncation regression check (chat-context-2): the latest digest must be
     # carried verbatim when its body is longer than the old 600-char cap.
