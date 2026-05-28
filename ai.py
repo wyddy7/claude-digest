@@ -62,6 +62,11 @@ class SourceBlock(BaseModel):
 class DigestResult(BaseModel):
     sources: list[SourceBlock]
     personal: list[str]
+    # Compressed "ещё:" tier — one-liners for real-but-low-signal items that
+    # don't earn a full block. Demote weak signal here, don't drop it (pure
+    # noise is still dropped entirely). Empty when everything notable is in
+    # sources. See auto-docs/for-frontend/digest_bot.DESIGN.md (tiering).
+    tail: list[str] = []
 
 
 class PostAdLabel(BaseModel):
@@ -231,7 +236,12 @@ def _to_html_digest(d: DigestResult) -> str:
         if src.example:
             lines.append(f"💡 {escape(src.example)}")
         blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+    html = "\n\n".join(blocks)
+    if d.tail:
+        items = " · ".join(escape(t) for t in d.tail)
+        tail_html = f"<i>ещё: {items}</i>"
+        html = f"{html}\n\n{tail_html}" if html else tail_html
+    return html
 
 
 def _to_html_personal(d: DigestResult) -> str | None:
@@ -334,14 +344,13 @@ async def generate_digest(
     posts_text = _format_posts(posts)
     schema_hint = DigestResult.model_json_schema()
     prompt = (
-        f"Посты из Telegram-каналов:{focus_line}\n\n"
+        f"Посты из Telegram-каналов за сутки:{focus_line}\n\n"
         f"{posts_text}\n\n---\n"
-        "Сгруппируй по источникам (4-6 самых информативных постов). "
-        "Для каждого источника:\n"
-        "- url: ТОЧНАЯ ссылка из поля ССЫЛКА (не придумывай)\n"
-        "- post_date: дата из поля ДАТА (формат DD.MM.YYYY)\n"
-        "- bullets: все факты из поста, одна строка — один факт\n"
-        "- example: только если концепт нетривиальный — одно предложение как первокурснику\n\n"
+        "Собери дайджест строго по правилам из system-промпта: фильтр шума → "
+        "честный отбор по источникам (ни один источник не занимает всё) → "
+        "sources по приоритету → tail (однострочники для низкосигнального) → "
+        "personal. url и post_date бери ТОЧНО из полей ССЫЛКА и ДАТА, не "
+        "придумывай.\n\n"
         f"Отвечай ТОЛЬКО валидным JSON по схеме: {schema_hint}"
     )
 
