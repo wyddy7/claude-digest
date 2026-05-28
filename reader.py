@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 ENGINE = "grade_a"
 
-TRIAGE_MAX_TOKENS = 500
+TRIAGE_MAX_TOKENS = 800
 EXTRACT_CHAR_BUDGET = 4000  # per-article cap folded into the digest prompt
 FETCH_TIMEOUT = 15
 
@@ -46,19 +46,19 @@ async def triage_links(posts: list[dict], *, client, model: str, usage_log=None)
     lines = []
     for pid, p in indexed:
         title = (p.get("text") or "")[:200].replace("\n", " ")
-        url_list = "\n".join(f"  - {u}" for u in p["external_urls"])
-        lines.append(f"POST {pid} (канал {p.get('channel', '?')}): {title}\nСсылки:\n{url_list}")
+        link_lines = "\n".join(f"    [{j}] {u}" for j, u in enumerate(p["external_urls"]))
+        lines.append(f"POST {pid} (канал {p.get('channel', '?')}): {title}\nLINKS:\n{link_lines}")
 
     system = (
         "Ты — редактор технического дайджеста. Для каждого поста реши, какие "
         "внешние ссылки стоит открыть и прочитать, чтобы понять суть. Многие "
         "посты — это агрегаторы: только заголовок + ссылка, а реальный контент "
         "лежит за ссылкой, поэтому такие ссылки почти всегда стоит открыть. "
-        "Выбирай ТОЛЬКО ссылки из предложенного списка — не придумывай новых. "
-        "Если пост самодостаточен и ссылка ничего не добавит — верни для него "
-        "пустой список.\n\n"
+        "Возвращай НОМЕРА ссылок (индексы из списка LINKS), а не сами URL. "
+        "Только номера из списка. Если пост самодостаточен и ссылка ничего не "
+        "добавит — верни для него пустой список.\n\n"
         'Ответь ТОЛЬКО валидным JSON по схеме: '
-        '{"selections": [{"post_id": "0", "urls": ["https://..."]}]}'
+        '{"selections": [{"post_id": "0", "links": [0, 1]}]}'
     )
     user = "Посты:\n\n" + "\n\n---\n\n".join(lines)
 
@@ -78,14 +78,21 @@ async def triage_links(posts: list[dict], *, client, model: str, usage_log=None)
         logger.warning(f"[reader] triage failed, opening nothing: {e}")
         return {}
 
-    allow = {pid: set(p["external_urls"]) for pid, p in indexed}
+    by_pid = {pid: p["external_urls"] for pid, p in indexed}
     out: dict[str, list[str]] = {}
     for sel in data.get("selections", []):
         pid = str(sel.get("post_id", ""))
-        if pid not in allow:
+        urls = by_pid.get(pid)
+        if urls is None:
             continue
-        # Provenance intersect — drop any URL the model invented.
-        chosen = [u for u in sel.get("urls", []) if u in allow[pid]]
+        # Index-based provenance: only in-range indices map to real URLs; the
+        # model cannot introduce a URL it wasn't shown.
+        chosen = []
+        for idx in sel.get("links", []):
+            if isinstance(idx, bool):
+                continue
+            if isinstance(idx, int) and 0 <= idx < len(urls):
+                chosen.append(urls[idx])
         if chosen:
             out[pid] = chosen
     return out
