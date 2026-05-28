@@ -64,6 +64,9 @@ try:
     check("schema_personal_field", len(dr.personal) == 2)
     check("sourceblock_bullets", len(dr.sources[0].bullets) == 2)
     check("sourceblock_url_validator", dr.sources[0].url.startswith("https://t.me/"))
+    check("schema_tail_defaults_empty", dr.tail == [])
+    dr_tail = DigestResult(sources=sources, personal=["p"], tail=["item one — chX", "item two — chY"])
+    check("schema_tail_field", len(dr_tail.tail) == 2)
 except Exception as e:
     FAIL.append("schema")
     print(f"  FAIL  schema: {e}")
@@ -99,6 +102,15 @@ try:
     check("personal_bullet", "Personal item 1" in html_personal)
     dr_empty = DigestResult(sources=[], personal=[])
     check("personal_none_when_empty", _to_html_personal(dr_empty) is None)
+    # tail tier: rendered as a compressed "ещё:" line, absent when empty
+    check("digest_no_tail_when_empty", "ещё:" not in html_digest)
+    dr_with_tail = DigestResult(
+        sources=dr.sources, personal=dr.personal,
+        tail=["Карпатый → Anthropic", "GitHub замедлился — naebnet"],
+    )
+    html_tail = _to_html_digest(dr_with_tail)
+    check("digest_tail_rendered", "ещё:" in html_tail and "Карпатый → Anthropic" in html_tail)
+    check("digest_tail_separator", " · " in html_tail)
 except Exception as e:
     FAIL.append("_to_html")
     print(f"  FAIL  _to_html: {e}")

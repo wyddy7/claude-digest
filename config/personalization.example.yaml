@@ -52,13 +52,16 @@ prompt:
   hard_rules:
     - bullets must be short factual lines taken from the source post.
     - example is optional and only for non-trivial concepts.
-    - personal must restate source-backed insights in the user's context, not invent new facts.
+    - personal must restate source-backed insights in the user's context, not invent new facts; do not weld unrelated facts into one fake frame, and do not force an actionless fact into personal.
+    - tail is a list of one-liners ("gist — channel") for real-but-low-signal items that did not earn a block; never put pure noise here; empty list when everything notable is already in sources.
     - post_date must come from source metadata in DD.MM.YYYY format.
     - url must come from the provided source link.
   source_selection_rules:
-    - Select 4-6 of the most informative sources.
-    - Skip low-signal posts completely.
+    - Per-source fairness — every channel with real signal gets at least one block; no single source (especially a high-volume link aggregator) takes more than ~2 body blocks. Do not let one verbose source crowd out the others.
+    - Body is ~6-8 topic blocks ordered by importance (most significant first) — a readability ceiling, not completeness.
     - One source can yield 1-5 factual bullets.
+    - Drop pure noise (ads, empty posts) entirely; real-but-weak signal is not dropped — compress it into the tail as a one-liner.
+    - If one story is covered by several channels, give a DIFFERENT fact/angle in each block — never repeat the same fact. Cross-source coverage signals importance, not a reason to duplicate.
   canonical_examples:
     - |
       channel="cryptoEssay" url="https://t.me/cryptoEssay/2932" post_date="01.04.2026"
