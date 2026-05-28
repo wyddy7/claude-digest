@@ -674,13 +674,14 @@ try:
         {"channel": "agg2", "text": "Self-contained", "external_urls": ["https://real.com/c"]},
     ]
     def _triage_resp(kw):
+        # index-based: idx 0 is valid (real.com/a), idx 99 is out-of-range
         return _json.dumps({"selections": [
-            {"post_id": "0", "urls": ["https://real.com/a", "https://hallucinated.com/x"]},
-            {"post_id": "1", "urls": []},
+            {"post_id": "0", "links": [0, 99]},
+            {"post_id": "1", "links": []},
         ]})
     sel = asyncio.run(triage_links(posts, client=FakeClient(_triage_resp), model="cheap/m"))
     check("p4_triage_selects_real", sel.get("0") == ["https://real.com/a"])
-    check("p4_triage_drops_hallucinated", all("hallucinated" not in u for u in sel.get("0", [])))
+    check("p4_triage_drops_oob_index", len(sel.get("0", [])) == 1)  # idx 99 ignored
     check("p4_triage_empty_post_absent", "1" not in sel)
 
     # --- triage failure (bad JSON) opens nothing, never raises ---
@@ -719,7 +720,7 @@ try:
     posts_e2e = [{"channel": "agg", "text": "t", "external_urls": ["https://real.com/a"]}]
     fetcher3 = FakeFetcher({"https://real.com/a": (article_html, "https://real.com/a")})
     def _triage_a(kw):
-        return _json.dumps({"selections": [{"post_id": "0", "urls": ["https://real.com/a"]}]})
+        return _json.dumps({"selections": [{"post_id": "0", "links": [0]}]})
     stats = asyncio.run(read_posts(posts_e2e, config=cfg, client=FakeClient(_triage_a), fetcher=fetcher3))
     check("p4_read_posts_attempted", stats["attempted"] == 1)
     check("p4_read_posts_ok", stats["ok"] == 1)
@@ -804,8 +805,8 @@ try:
 
     registry = build_registry_from_state({"model": "m"}, load_personalization())
 
-    def _mk_triage(urls):
-        return lambda kw: _json.dumps({"selections": [{"post_id": "0", "urls": urls}]})
+    def _mk_triage(idxs):
+        return lambda kw: _json.dumps({"selections": [{"post_id": "0", "links": idxs}]})
 
     # --- per-channel cap truncates ---
     cfg_cap = PipelineConfig(read_mode="extract", models=registry,
@@ -814,7 +815,7 @@ try:
                   "external_urls": ["https://x.com/1", "https://x.com/2", "https://x.com/3"]}]
     f_cap = FakeFetcher()
     st = asyncio.run(_read_posts(posts_cap, config=cfg_cap,
-                                 client=FakeClient(_mk_triage(["https://x.com/1", "https://x.com/2", "https://x.com/3"])),
+                                 client=FakeClient(_mk_triage([0, 1, 2])),
                                  fetcher=f_cap))
     check("p5_cap_attempts_2", st["attempted"] == 2)
     check("p5_cap_skips_1", st["urls_skipped_cap"] == 1)
@@ -828,7 +829,7 @@ try:
     f_dd = FakeFetcher()
     fdb = FakeDB(seen={"https://x.com/b"})
     st2 = asyncio.run(_read_posts(posts_dd, config=cfg_dd,
-                                  client=FakeClient(_mk_triage(["https://x.com/a", "https://x.com/b"])),
+                                  client=FakeClient(_mk_triage([0, 1])),
                                   fetcher=f_dd, db_module=fdb))
     check("p5_dedup_skips_seen", st2["urls_skipped_dedup"] == 1)
     check("p5_dedup_fetches_only_fresh", f_dd.gets == ["https://x.com/a"])
@@ -837,10 +838,12 @@ try:
     # --- provenance: a hallucinated URL is never fetched ---
     posts_pv = [{"channel": "agg", "text": "t", "external_urls": ["https://x.com/real"]}]
     f_pv = FakeFetcher()
+    # idx 0 = real; idx 7 is out-of-range (the model cannot inject a URL it
+    # wasn't shown — provenance is by construction with index-based triage)
     asyncio.run(_read_posts(posts_pv, config=cfg_cap,
-                            client=FakeClient(_mk_triage(["https://x.com/real", "https://evil.com/inject"])),
+                            client=FakeClient(_mk_triage([0, 7])),
                             fetcher=f_pv))
-    check("p5_provenance_blocks_hallucinated", all("evil.com" not in u for u in f_pv.gets))
+    check("p5_provenance_only_real_fetched", f_pv.gets == ["https://x.com/real"])
 except Exception as e:
     FAIL.append("reader_guardrails")
     print(f"  FAIL  reader_guardrails: {e}")

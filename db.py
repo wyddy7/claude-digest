@@ -45,10 +45,20 @@ async def init_supabase(url: str, key: str) -> None:
 
 
 async def close_pool() -> None:
-    """Close supabase HTTP client."""
+    """Close supabase HTTP client. The supabase AsyncClient has no public close
+    method across versions — try the known ones, swallow if absent (non-fatal)."""
     global _client
     if _client:
-        await _client.aclose()
+        for closer in ("aclose", "close"):
+            fn = getattr(_client, closer, None)
+            if callable(fn):
+                try:
+                    res = fn()
+                    if hasattr(res, "__await__"):
+                        await res
+                except Exception as e:
+                    logger.debug(f"close_pool: {closer} failed (non-fatal): {e}")
+                break
         _client = None
     logger.info("DB connections closed")
 
