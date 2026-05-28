@@ -53,7 +53,7 @@ prompt:
     - bullets must be short factual lines taken from the source post.
     - example is optional and only for non-trivial concepts.
     - personal must restate source-backed insights in the user's context, not invent new facts; do not weld unrelated facts into one fake frame, and do not force an actionless fact into personal.
-    - tail is a list of one-liners ("gist — channel") for real-but-low-signal items that did not earn a block; never put pure noise here; empty list when everything notable is already in sources.
+    - tail is a list of one-liners ("gist — channel") for real-but-low-signal items that did not earn a block; never put pure noise here; AT MOST 5 lines — keep only the most notable, drop the rest; empty list when everything notable is already in sources.
     - post_date must come from source metadata in DD.MM.YYYY format.
     - url must come from the provided source link.
   source_selection_rules:
