@@ -28,6 +28,10 @@ def upgrade() -> None:
         sa.Column("last_fetched_date", sa.Text(), nullable=False),
         sa.Column("tenant_id", sa.Text(), nullable=False, server_default=sa.text("''")),
     )
+    # Enable RLS with NO policies: the bot connects with the service_role key
+    # (which bypasses RLS), while anon/authenticated keys get deny-by-default.
+    # This is a server-only table — no client should ever read it directly.
+    op.execute("ALTER TABLE link_cache ENABLE ROW LEVEL SECURITY")
 
 
 def downgrade() -> None:
