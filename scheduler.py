@@ -9,6 +9,7 @@ import logging
 import os
 import signal
 
+import httpx
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
@@ -18,6 +19,8 @@ from telegram.helpers import escape_markdown
 import db
 from agent import run_digest_pipeline
 from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
+from personalization import load_personalization
+from pipeline_config import build_pipeline_config, make_openrouter_client
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -25,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
+OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 MOSCOW = pytz.timezone("Europe/Moscow")
 
 
@@ -43,7 +47,14 @@ async def run_digest():
             except Exception as e:
                 logger.warning(f"scheduler: status update failed: {e}")
 
-        result = await run_digest_pipeline(on_status=_on_status)
+        cfg_data = await db.load()
+        cfg_yaml = load_personalization()
+        config = build_pipeline_config(cfg_data, cfg_yaml)
+        llm_client = make_openrouter_client(OPENROUTER_KEY)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
+            result = await run_digest_pipeline(
+                config, llm_client=llm_client, fetcher=fetcher, on_status=_on_status
+            )
 
         digest_html = result["digest_html"]
         personal_html = result.get("personal_html", "")

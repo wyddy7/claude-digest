@@ -39,6 +39,14 @@ def check(name, condition, detail=""):
         print(f"  FAIL  {name}" + (f": {detail}" if detail else ""))
 
 
+def _raises(fn, exc=Exception):
+    try:
+        fn()
+        return False
+    except exc:
+        return True
+
+
 print("\n[1] DigestResult / SourceBlock schema")
 try:
     sources = [
@@ -442,6 +450,139 @@ try:
 except Exception as e:
     FAIL.append("_extract_external_urls")
     print(f"  FAIL  _extract_external_urls: {e}")
+    traceback.print_exc()
+
+
+print("\n[13] PipelineConfig + dependency injection")
+try:
+    import asyncio
+    import json as _json
+
+    from ai import filter_ads, generate_digest
+    from pipeline_config import build_pipeline_config, PipelineConfig, StageModel
+
+    cfg_yaml = load_personalization()
+
+    # --- registry mapping + metadata ---
+    cfg = build_pipeline_config({"model": "user/custom-model", "channels": []}, cfg_yaml)
+    check("p2_read_mode_off_default", cfg.read_mode == "off")
+    check("p2_digest_from_user_state", cfg.models["digest"].model_id == "user/custom-model")
+    check("p2_ad_filter_default_cheap", cfg.models["ad_filter"].model_id == "deepseek/deepseek-chat")
+    check("p2_digest_metadata_present", bool(cfg.models["digest"].tier) and bool(cfg.models["digest"].rationale))
+    check("p2_ad_filter_metadata_present", cfg.models["ad_filter"].tier == "cheap")
+    check("p2_guardrail_defaults", cfg.per_channel_link_cap == 20 and cfg.dedup_enabled and cfg.tenant_id is None)
+
+    # --- fake LLM client (mimics AsyncOpenAI surface) ---
+    def _fake_responder(kwargs):
+        msgs = kwargs.get("messages", [])
+        user = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+        if "Оцени каждый пост" in user:
+            return _json.dumps({"posts": [{"index": i, "is_ad": False} for i in range(3)]})
+        return _json.dumps({
+            "sources": [{
+                "channel": "ch", "url": "https://t.me/ch/1",
+                "post_date": "01.01.2026", "bullets": ["a real fact"], "example": "",
+            }],
+            "personal": ["an insight"],
+        })
+
+    class _FakeUsage:
+        prompt_tokens = 10
+        completion_tokens = 5
+        total_tokens = 15
+
+    class _FakeMessage:
+        def __init__(self, content):
+            self.content = content
+
+    class _FakeChoice:
+        def __init__(self, content):
+            self.message = _FakeMessage(content)
+
+    class _FakeResp:
+        def __init__(self, content):
+            self.choices = [_FakeChoice(content)]
+            self.usage = _FakeUsage()
+
+    class _FakeCompletions:
+        def __init__(self, responder):
+            self._responder = responder
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return _FakeResp(self._responder(kwargs))
+
+    class _FakeChat:
+        def __init__(self, responder):
+            self.completions = _FakeCompletions(responder)
+
+    class FakeLLMClient:
+        def __init__(self, responder):
+            self.chat = _FakeChat(responder)
+
+    class FakeDB:
+        def __init__(self, channels):
+            self._channels = channels
+
+        async def load(self):
+            return {"channels": self._channels, "model": "user/custom-model", "current_focus": ""}
+
+        async def load_history(self, limit=0):
+            return []
+
+        async def append_to_history(self, digest_html, posts_count):
+            self.saved = (digest_html, posts_count)
+
+    fake = FakeLLMClient(_fake_responder)
+
+    # --- filter_ads via injected client/model ---
+    posts = [{"channel": "c", "text": "Разбор архитектуры с деталями и фактами"}]
+    kept = asyncio.run(filter_ads(posts, client=fake, model="cheap/model"))
+    check("p2_filter_ads_injected", len(kept) == 1)
+    check("p2_filter_ads_used_injected_model", fake.chat.completions.calls[-1]["model"] == "cheap/model")
+
+    # --- generate_digest via injected client/model ---
+    dposts = [{"channel": "ch", "text": "content", "link": "https://t.me/ch/1",
+               "time": "2026-01-01T00:00:00+00:00"}]
+    html, personal, stats = asyncio.run(
+        generate_digest(dposts, {"current_focus": ""}, client=fake, model="digest/model")
+    )
+    check("p2_generate_digest_html", "ch" in html and len(html) > 0)
+    check("p2_generate_digest_used_injected_model",
+          any(c["model"] == "digest/model" for c in fake.chat.completions.calls))
+
+    # --- end-to-end pipeline wiring (empty channels → no network/LLM) ---
+    from agent import run_digest_pipeline
+    fake2 = FakeLLMClient(_fake_responder)
+    result = asyncio.run(run_digest_pipeline(
+        cfg, db_module=FakeDB(channels=[]), llm_client=fake2, fetcher=None
+    ))
+    check("p2_pipeline_dict_shape",
+          set(result.keys()) == {"digest_html", "personal_html", "stats_html", "posts_count"})
+    check("p2_pipeline_empty_zero_posts", result["posts_count"] == 0)
+    check("p2_pipeline_requires_llm_client",
+          _raises(lambda: asyncio.run(run_digest_pipeline(cfg, db_module=FakeDB([]), llm_client=None))))
+except Exception as e:
+    FAIL.append("pipeline_config_di")
+    print(f"  FAIL  pipeline_config_di: {e}")
+    traceback.print_exc()
+
+
+print("\n[17] read_mode=off parity: external_urls do not leak into the prompt")
+try:
+    p = {
+        "channel": "c", "text": "post body", "link": "https://t.me/c/1",
+        "time": "2026-01-01T00:00:00+00:00",
+        "external_urls": ["https://external.example.com/secret-article"],
+    }
+    out = _format_posts([p])
+    check("p17_offmode_no_external_url_leak",
+          "https://external.example.com/secret-article" not in out)
+    check("p17_offmode_no_article_tag", "<article" not in out)
+except Exception as e:
+    FAIL.append("read_mode_off_parity")
+    print(f"  FAIL  read_mode_off_parity: {e}")
     traceback.print_exc()
 
 
