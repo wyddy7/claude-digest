@@ -16,7 +16,8 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 AD_FILTER_MODEL = "deepseek/deepseek-chat"
 AD_FILTER_MAX_TOKENS = 250
-DIGEST_MAX_TOKENS = 1800
+DIGEST_MAX_TOKENS = 3500  # reader (extract mode) folds article text into the
+# prompt, so the digest legitimately produces more output; 1800 truncated it.
 VISION_FILTER_MAX_TOKENS = 5
 SUMMARY_MAX_TOKENS = 400
 
