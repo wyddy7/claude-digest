@@ -472,6 +472,33 @@ try:
     check("p2_ad_filter_metadata_present", cfg.models["ad_filter"].tier == "cheap")
     check("p2_guardrail_defaults", cfg.per_channel_link_cap == 20 and cfg.dedup_enabled and cfg.tenant_id is None)
 
+    # --- P3: all four stages resolve with metadata ---
+    from pipeline_config import build_registry_from_state, describe_registry, stage_from_yaml
+    reg = build_registry_from_state({"model": "user/m"}, cfg_yaml)
+    check("p3_four_stages_resolve",
+          {"digest", "ad_filter", "triage", "summarize_link"} <= set(reg.keys()))
+    check("p3_cheap_stages_have_tier",
+          all(reg[s].tier for s in ("ad_filter", "triage", "summarize_link")))
+    check("p3_cheap_stages_have_task_rationale",
+          all(reg[s].task and reg[s].rationale for s in ("triage", "summarize_link")))
+    check("p3_cheap_stages_deepseek",
+          all(reg[s].model_id == "deepseek/deepseek-chat" for s in ("ad_filter", "triage", "summarize_link")))
+
+    # --- P3: bare-string back-compat + mapping form both normalize ---
+    bare = stage_from_yaml("some/model", default_tier="cheap")
+    check("p3_bare_string_normalizes", bare.model_id == "some/model" and bare.tier == "cheap")
+    mapped = stage_from_yaml({"model_id": "m/x", "tier": "premium", "rationale": "r", "task": "t"})
+    check("p3_mapping_normalizes",
+          mapped.model_id == "m/x" and mapped.tier == "premium" and mapped.rationale == "r")
+    # registry built from a yaml whose ad_filter is a bare string still works
+    reg_bare = build_registry_from_state({}, {"models": {"ad_filter": "x/cheap"}})
+    check("p3_registry_bare_ad_filter", reg_bare["ad_filter"].model_id == "x/cheap")
+
+    # --- P3: describe_registry renders metadata for UI/docs ---
+    desc = describe_registry(reg)
+    check("p3_describe_lists_stages", "triage" in desc and "ad_filter" in desc)
+    check("p3_describe_shows_tier", "[cheap]" in desc)
+
     # --- fake LLM client (mimics AsyncOpenAI surface) ---
     def _fake_responder(kwargs):
         msgs = kwargs.get("messages", [])
