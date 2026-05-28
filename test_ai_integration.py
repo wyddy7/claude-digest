@@ -886,6 +886,47 @@ except Exception as e:
     traceback.print_exc()
 
 
+print("\n[19] read_mode=agentic (Grade B) raises — no silent fallthrough")
+try:
+    import asyncio
+    from agent import run_digest_pipeline as _rdp
+    from pipeline_config import PipelineConfig, build_registry_from_state
+
+    class _MsgX:
+        def __init__(self, c): self.content = c
+    class _ChoiceX:
+        def __init__(self, c): self.message = _MsgX(c)
+    class _RespX:
+        def __init__(self, c): self.choices = [_ChoiceX(c)]
+    class _CompX:
+        async def create(self, **kw): return _RespX("{}")
+    class _ChatX:
+        completions = _CompX()
+    class _ClientX:
+        chat = _ChatX()
+    class _DBX:
+        async def load(self): return {"channels": []}
+        async def load_history(self, limit=0): return []
+        async def append_to_history(self, *a): pass
+
+    reg = build_registry_from_state({"model": "m"}, load_personalization())
+    cfg_agentic = PipelineConfig(read_mode="agentic", models=reg)
+
+    def _run_agentic():
+        asyncio.run(_rdp(cfg_agentic, db_module=_DBX(), llm_client=_ClientX(), fetcher=None))
+    check("p7_agentic_raises_notimplemented", _raises(_run_agentic, NotImplementedError))
+
+    # sanity: off-mode with same fakes does NOT raise
+    cfg_off = PipelineConfig(read_mode="off", models=reg)
+    def _run_off():
+        asyncio.run(_rdp(cfg_off, db_module=_DBX(), llm_client=_ClientX(), fetcher=None))
+    check("p7_off_does_not_raise", not _raises(_run_off, Exception))
+except Exception as e:
+    FAIL.append("grade_b_stub")
+    print(f"  FAIL  grade_b_stub: {e}")
+    traceback.print_exc()
+
+
 print("\n[16] reader: <article> isolation + injection rule")
 try:
     # extracted text folds into the prompt as delimited <article> DATA

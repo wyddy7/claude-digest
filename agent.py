@@ -25,7 +25,7 @@ import db
 import reader
 from ai import build_system_prompt, filter_ads, generate_digest, summarize_chat_history
 from personalization import load_personalization
-from pipeline_config import READ_MODE_EXTRACT
+from pipeline_config import READ_MODE_AGENTIC, READ_MODE_EXTRACT
 from scraper import scrape_channel
 
 logger = logging.getLogger(__name__)
@@ -287,6 +287,18 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     """
     if llm_client is None:
         raise ValueError("run_digest_pipeline requires an llm_client (see pipeline_config.make_openrouter_client)")
+
+    # Grade B (iterative model-driven fetch loop) is intentionally NOT
+    # implemented inside this deterministic pipeline — it would cross the
+    # "no agent framework in run_digest_pipeline" invariant. It must live in a
+    # separate, explicitly flagged module. Fail fast rather than silently
+    # falling through to off-mode behavior.
+    if config.read_mode == READ_MODE_AGENTIC:
+        raise NotImplementedError(
+            "Grade B reader (read_mode=agentic) is a stub — it must live in a "
+            "separate flagged module, never bolted onto run_digest_pipeline. "
+            "See digest_bot/CLAUDE.md."
+        )
 
     usage_log: list[dict] = []  # per-LLM-call token usage, aggregated into cost_summary below
 

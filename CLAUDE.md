@@ -24,6 +24,15 @@ These are fixed — do not introduce alternatives without an explicit reason:
 - Wrapping `run_digest_pipeline` in any agent framework. The digest
   pipeline is and stays a plain async function — adding tool-selection
   LLM calls to a deterministic 5-step flow is regression by design.
+  - **Grade A reader is ALLOWED** (`read_mode=extract`): one deterministic
+    triage LLM call + a fixed fetch→resolve-1-hop→trafilatura-extract
+    sequence. It is a single bounded decision, not a tool-selection loop, so
+    it stays on the allowed side of this invariant.
+  - **Grade B is BANNED inside `run_digest_pipeline`** (`read_mode=agentic`):
+    an iterative, model-driven fetch→read→fetch loop. It must live in a
+    separate, explicitly flagged module. The pipeline raises
+    `NotImplementedError` for `read_mode=agentic` rather than silently
+    degrading. Do not bolt an agent loop onto the pipeline to implement it.
 
 ## Pre-push checklist
 
