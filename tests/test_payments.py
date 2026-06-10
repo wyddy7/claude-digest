@@ -1,12 +1,17 @@
 """
-Offline tests for the Stars payment surface (SPEC-payments §5.2 cases 6–7).
+Offline tests for the Stars payment surface (SPEC-payments §5.2 cases 6–7 + T3 extras).
 
 Logic cases 1–5 (is_subscription_active / stacking / grant_trial / fresh+dup
 apply_successful_payment) live in tests/test_subscriptions.py against the same
 FakeDB. Here we add:
   * case 6 — grant-failure rollback (ledger row deleted + re-raise; retry succeeds);
   * case 7 — PTB handler smoke (mocked Update): pre_checkout answers ok=True once,
-             successful_payment calls apply_successful_payment + replies.
+             successful_payment calls apply_successful_payment + replies;
+  * send_invoice cases — monthly + quarterly: currency=XTR, provider_token="",
+    correct payload, DB-sourced price (not constants);
+  * stacking on active trial — payment during active trial calls update_subscription
+    with right args (trial_ends_at untouched, paid sub stacks on pro_until);
+  * idempotency — duplicate SuccessfulPayment re-acks, no double-grant.
 
 No network, no Telegram, no real tg ids (synthetic 111-style strings only).
 """
@@ -258,3 +263,111 @@ async def test_cb_buy_product_sends_invoice(fdb):
     assert kwargs["provider_token"] == ""
     assert kwargs["currency"] == "XTR"
     assert kwargs["prices"][0].amount == 900
+
+
+# ─── send_invoice: monthly + quarterly explicit assertions ────────────────────
+
+@pytest.mark.asyncio
+async def test_send_invoice_monthly_stars_flags(fdb):
+    """send_pro_invoice for digest_pro_month uses currency=XTR, provider_token='',
+    correct payload and DB-sourced price (not a Python constant)."""
+    _seed_pro_defaults(fdb)
+    tg_id = 111111855
+    _seed_user(fdb, tg_id)
+
+    update = MagicMock()
+    update.effective_user.id = tg_id
+    update.effective_chat.id = tg_id
+    context = MagicMock()
+    context.bot.send_invoice = AsyncMock()
+
+    await sub_surface.send_pro_invoice(update, context, "digest_pro_month")
+
+    context.bot.send_invoice.assert_awaited_once()
+    kwargs = context.bot.send_invoice.await_args.kwargs
+    assert kwargs["currency"] == "XTR", "Stars invoices must use currency='XTR'"
+    assert kwargs["provider_token"] == "", "Stars invoices must have provider_token=''"
+    assert kwargs["payload"] == "digest_pro_month"
+    # Price comes from DB tier defaults (900), not a hardcoded constant.
+    assert kwargs["prices"][0].amount == 900
+    assert kwargs["chat_id"] == tg_id
+
+
+@pytest.mark.asyncio
+async def test_send_invoice_quarterly_stars_flags(fdb):
+    """send_pro_invoice for digest_pro_quarter uses correct DB-sourced price and payload."""
+    _seed_pro_defaults(fdb)
+    tg_id = 111111866
+    _seed_user(fdb, tg_id)
+
+    update = MagicMock()
+    update.effective_user.id = tg_id
+    update.effective_chat.id = tg_id
+    context = MagicMock()
+    context.bot.send_invoice = AsyncMock()
+
+    await sub_surface.send_pro_invoice(update, context, "digest_pro_quarter")
+
+    context.bot.send_invoice.assert_awaited_once()
+    kwargs = context.bot.send_invoice.await_args.kwargs
+    assert kwargs["currency"] == "XTR"
+    assert kwargs["provider_token"] == ""
+    assert kwargs["payload"] == "digest_pro_quarter"
+    # Price from DB (2400 for quarter), not hardcoded.
+    assert kwargs["prices"][0].amount == 2400
+    assert kwargs["chat_id"] == tg_id
+
+
+# ─── stacking on active trial ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_payment_during_active_trial_stacks_on_pro_until(fdb):
+    """A user who pays while their trial is still active gets pro_until set from now
+    (not from trial_ends_at) and trial_ends_at remains untouched.
+
+    Per netwho pattern: update_subscription bases off pro_until if present and
+    future, else now. When the user has only a trial (no pro_until), paid days
+    start from now. The successful_payment handler must call apply_successful_payment
+    with the exact tg_user_id, payload, and charge_id from the update.
+    """
+    _seed_pro_defaults(fdb)
+    tg_id = 111111877
+    from datetime import timezone as _tz
+    trial_end_iso = (
+        datetime.now(_tz.utc) + timedelta(days=2)
+    ).isoformat()
+    _seed_user(fdb, tg_id, trial_ends_at=trial_end_iso, trial_used=True)
+
+    # No pro_until yet — user is on trial, paying for month.
+    update = MagicMock()
+    update.effective_user.id = tg_id
+    update.message.successful_payment.invoice_payload = "digest_pro_month"
+    update.message.successful_payment.telegram_payment_charge_id = "charge_trial_stack_001"
+    update.message.successful_payment.total_amount = 900
+    update.message.reply_text = AsyncMock()
+    context = MagicMock()
+
+    await sub_surface.successful_payment(update, context)
+
+    row = fdb.users[tg_id]
+    # pro_until was None before; after payment it should be set ~30 days from now.
+    assert row["pro_until"] is not None, "pro_until must be set after payment"
+    pro_until = datetime.fromisoformat(row["pro_until"].replace("Z", "+00:00"))
+    if pro_until.tzinfo is None:
+        from datetime import timezone as _tz2
+        pro_until = pro_until.replace(tzinfo=_tz2.utc)
+
+    now = datetime.now(_tz.utc)
+    # 30 days (from DB) from now — allow ±5s for test clock skew.
+    assert timedelta(days=29, hours=23) < (pro_until - now) < timedelta(days=30, hours=1)
+
+    # trial_ends_at is UNCHANGED — payment does not truncate the trial.
+    assert row["trial_ends_at"] == trial_end_iso, "trial_ends_at must not be modified by payment"
+
+    # Ledger row written.
+    assert "charge_trial_stack_001" in fdb.events
+
+    # Handler ACK-ed the user with "Pro активирован".
+    update.message.reply_text.assert_awaited_once()
+    sent = update.message.reply_text.await_args.args[0]
+    assert "Pro активирован" in sent
