@@ -408,6 +408,7 @@ name = "digest-bot"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "apscheduler" },
     { name = "beautifulsoup4" },
     { name = "deepagents" },
     { name = "httpx" },
@@ -426,6 +427,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "beautifulsoup4" },
     { name = "deepagents", specifier = ">=0.1.0" },
     { name = "httpx", specifier = ">=0.28.1" },

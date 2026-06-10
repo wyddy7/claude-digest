@@ -17,6 +17,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.helpers import escape_markdown
 
 import db
+import subscriptions
 from agent import run_digest_pipeline
 from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
 from personalization import load_personalization
@@ -114,6 +115,111 @@ async def run_digest():
     logger.info(f"Scheduled digest done: {posts_count} posts")
 
 
+async def _send_digest_chunks(bot, chat_id: int, full_text: str,
+                              personal_html: str = "", stats_html: str = "") -> None:
+    """Chunk + send a digest to one chat (Telegram 4096-char limit). Shared by the
+    legacy single-tenant path and the multi-tenant fan-out."""
+    max_len = 4096
+    if len(full_text) <= max_len:
+        chunks = [full_text]
+    else:
+        chunks = []
+        current = ""
+        for para in full_text.split("\n\n"):
+            if len(current) + len(para) + 2 <= max_len:
+                current = current + ("\n\n" if current else "") + para
+            else:
+                if current:
+                    chunks.append(current)
+                while len(para) > max_len:
+                    chunks.append(para[:max_len])
+                    para = para[max_len:]
+                current = para
+        if current:
+            chunks.append(current)
+
+    for chunk in chunks:
+        await bot.send_message(chat_id, chunk, parse_mode="HTML", disable_web_page_preview=True)
+
+    personal_parts = [p for p in [personal_html, stats_html] if p]
+    if personal_parts:
+        await bot.send_message(
+            chat_id, "\n\n".join(personal_parts),
+            parse_mode="HTML", disable_web_page_preview=True,
+        )
+
+
+async def _deliver_user_digest(bot, user: dict) -> int:
+    """Generate + deliver one user's digest using their own channels/settings/
+    personalization. Returns posts_count. Per-user chat_id = the numeric
+    tg_user_id (the value Telegram routes on)."""
+    from datetime import datetime as dt
+
+    user_id = user["id"]
+    tg_user_id = user["tg_user_id"]
+    settings = await db.load_settings(user_id)
+
+    cfg_data = {
+        "channels": settings.get("channels") or [],
+        "current_focus": settings.get("current_focus") or "",
+        "focus_auto_reset": bool(settings.get("focus_auto_reset")),
+        "model": settings.get("model") or db.DEFAULT_MODEL,
+        "last_digest": settings.get("last_digest") or "",
+        "last_digest_time": settings.get("last_digest_time") or "",
+        "interaction_history": settings.get("interaction_history") or [],
+    }
+    # Personalization: DB per-tenant home, falling back to the legacy yaml template.
+    cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
+    config = build_pipeline_config(cfg_data, cfg_yaml)
+    llm_client = make_openrouter_client(OPENROUTER_KEY)
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
+        result = await run_digest_pipeline(config, llm_client=llm_client, fetcher=fetcher)
+
+    digest_html = result["digest_html"]
+    posts_count = result.get("posts_count", 0)
+    date_str = dt.now(MOSCOW).strftime("%d.%m.%Y")
+    full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
+    await _send_digest_chunks(
+        bot, tg_user_id, full_text,
+        result.get("personal_html", ""), result.get("stats_html", ""),
+    )
+
+    await db.save_settings(user_id, {
+        "last_digest": digest_html,
+        "last_digest_time": dt.now().isoformat(),
+    })
+    return posts_count
+
+
+async def run_digest_fanout():
+    """Multi-tenant fan-out tick: iterate active users, gate each on subscription
+    state, deliver per-user. If no users rows exist (legacy mode), fall through to
+    the existing single-tenant run_digest() so the live bot is unaffected.
+
+    STUB: per-user errors are isolated (one user's failure never blocks others);
+    expiry-warning + delivery gating are wired, the per-user pipeline reuse is the
+    surface a later stage hardens (rate limits, parallelism caps, retries)."""
+    users = await db.list_active_users()
+    if not users:
+        logger.info("Fan-out: no users rows — legacy single-tenant path")
+        await run_digest()
+        return
+
+    logger.info(f"Fan-out: {len(users)} active user(s)")
+    async with Bot(BOT_TOKEN) as bot:
+        for user in users:
+            tg_user_id = user["tg_user_id"]
+            try:
+                if not await subscriptions.is_subscription_active(tg_user_id):
+                    # Inactive: optionally warn near expiry, then skip delivery.
+                    await subscriptions.maybe_warn_expiry(tg_user_id, bot)
+                    continue
+                posts_count = await _deliver_user_digest(bot, user)
+                logger.info(f"Fan-out: delivered to {tg_user_id} ({posts_count} posts)")
+            except Exception as e:
+                logger.warning(f"Fan-out: user {tg_user_id} failed (isolated): {e}")
+
+
 async def run_checkin():
     data = await db.load()
     focus = data.get("current_focus", "")
@@ -144,7 +250,9 @@ async def _run():
     logger.info("DB ready (supabase-py)")
 
     scheduler = AsyncIOScheduler(timezone=MOSCOW)
-    scheduler.add_job(run_digest, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")
+    # Multi-tenant fan-out tick. Falls back to the legacy single-tenant run_digest()
+    # when no users rows exist, so the live single-tenant bot is unaffected.
+    scheduler.add_job(run_digest_fanout, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")
     scheduler.add_job(run_checkin, "cron", hour=CHECKIN_HOUR, minute=CHECKIN_MINUTE, misfire_grace_time=300, name="daily_checkin")
 
     stop_event = asyncio.Event()
