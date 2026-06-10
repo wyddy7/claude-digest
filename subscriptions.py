@@ -104,17 +104,19 @@ async def active_until(tg_user_id: int) -> Optional[datetime]:
 
 # ─── mutators ─────────────────────────────────────────────────────────────────
 
-async def update_subscription(tg_user_id: int, days: int) -> datetime:
+async def update_subscription(tg_user_id: int, days: int, tier: str = "pro") -> datetime:
     """Extend or set the PAID subscription. STACKS on the active remainder: if
     pro_until is still in the future, add `days` to it; else start from now.
     `days` is supplied by the caller from DB tier defaults — never a constant.
-    Returns the new pro_until."""
+    Also flips users.tier to the paid bundle name so get_effective_limit
+    resolves the paid tier's defaults (activeness itself stays computed from
+    timestamps, never from tier). Returns the new pro_until."""
     row = await db.get_user_by_tg_id(tg_user_id)
     now = _now()
     pro_until = _parse_ts(row.get("pro_until")) if row else None
     base = pro_until if (pro_until and pro_until > now) else now
     new_until = base + timedelta(days=days)
-    await db.update_subscription_row(tg_user_id, new_until.isoformat())
+    await db.update_subscription_row(tg_user_id, new_until.isoformat(), tier=tier)
     return new_until
 
 
@@ -199,7 +201,7 @@ async def apply_successful_payment(
     keys = _PERIOD_KEYS[spec["period"]]
     days = int(await db.get_tier_default(spec["tier"], keys["days"]))
     try:
-        new_until = await update_subscription(tg_user_id, days)
+        new_until = await update_subscription(tg_user_id, days, tier=spec["tier"])
     except Exception:
         await db.delete_subscription_event(telegram_payment_charge_id)
         raise

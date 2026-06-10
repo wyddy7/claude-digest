@@ -365,10 +365,16 @@ async def get_effective_limit(user_id: str, key: str, fallback: Any = None) -> A
 
 # ─── multi-tenant: subscription row reads/writes (logic lives in subscriptions.py) ──
 
-async def update_subscription_row(tg_user_id: int, pro_until_iso: Optional[str]) -> bool:
-    """Set users.pro_until to the given ISO string (or None). Returns True if a
-    row was updated. The stacking decision is made in subscriptions.update_subscription."""
-    return await update_user_fields(tg_user_id, {"pro_until": pro_until_iso})
+async def update_subscription_row(
+    tg_user_id: int, pro_until_iso: Optional[str], tier: Optional[str] = None
+) -> bool:
+    """Set users.pro_until to the given ISO string (or None), optionally flipping
+    users.tier to the paid bundle name. Returns True if a row was updated. The
+    stacking decision is made in subscriptions.update_subscription."""
+    fields: dict = {"pro_until": pro_until_iso}
+    if tier:
+        fields["tier"] = tier
+    return await update_user_fields(tg_user_id, fields)
 
 
 async def grant_trial_row(tg_user_id: int, trial_ends_at_iso: str) -> bool:

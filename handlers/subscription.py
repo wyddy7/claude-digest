@@ -51,8 +51,8 @@ async def _buy_keyboard() -> InlineKeyboardMarkup:
 async def _buy_text() -> str:
     price_month = await db.get_tier_default("pro", "price_month_stars", "—")
     price_quarter = await db.get_tier_default("pro", "price_quarter_stars", "—")
-    anchor_month = await db.get_tier_default("pro", "anchor_month_stars", None)
-    anchor_quarter = await db.get_tier_default("pro", "anchor_quarter_stars", None)
+    anchor_month = await db.get_tier_default("pro", "price_anchor_month_stars", None)
+    anchor_quarter = await db.get_tier_default("pro", "price_anchor_quarter_stars", None)
     month_line = f"▸ Месяц — {price_month}⭐"
     if anchor_month:
         month_line += f"  (~~{anchor_month}~~)"

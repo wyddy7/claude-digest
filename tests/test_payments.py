@@ -66,8 +66,11 @@ class FakeDB:
         self.users[tg_user_id].update(fields)
         return True
 
-    async def update_subscription_row(self, tg_user_id: int, pro_until_iso: Optional[str]) -> bool:
-        return await self.update_user_fields(tg_user_id, {"pro_until": pro_until_iso})
+    async def update_subscription_row(self, tg_user_id: int, pro_until_iso: Optional[str], tier: Optional[str] = None) -> bool:
+        fields = {"pro_until": pro_until_iso}
+        if tier:
+            fields["tier"] = tier
+        return await self.update_user_fields(tg_user_id, fields)
 
     async def grant_trial_row(self, tg_user_id: int, trial_ends_at_iso: str) -> bool:
         return await self.update_user_fields(tg_user_id, {
@@ -142,11 +145,11 @@ async def test_grant_failure_rolls_back_ledger_and_retry_succeeds(fdb, monkeypat
     real_update = subs_module.update_subscription
     calls = {"n": 0}
 
-    async def flaky_update(tg_user_id: int, days: int):
+    async def flaky_update(tg_user_id: int, days: int, tier: str = "pro"):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("simulated grant failure")
-        return await real_update(tg_user_id, days)
+        return await real_update(tg_user_id, days, tier=tier)
 
     monkeypatch.setattr(subs_module, "update_subscription", flaky_update)
 
