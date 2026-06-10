@@ -1,0 +1,42 @@
+# config/onboarding_topics.yaml — EDITABLE SEED DATA
+#
+# Topic key -> ordered list of public Telegram channel usernames (no leading @).
+# Loaded at startup by handlers/onboarding.py; freely editable by the owner
+# without a code redeploy. The owner curates / replaces dead channels at
+# onboarding-curation time. NOT hardcoded in onboarding.py.
+#
+# Each set is 4-5 channels so a user picking two topics still fits a small
+# channel cap. A channel may appear under two topics — dedup on merge.
+
+ai: # 🤖 AI и LLM
+  - llm_notes
+  - ai_newz
+  - seeallochnaya
+  - data_secrets
+  - gonzo_ML
+dev: # 💻 Разработка / Tech
+  - addmeto
+  - tech_priticha
+  - htech_plus
+  - cryptoEssay
+  - rbc_technology
+crypto: # 🪙 Крипта / Web3
+  - if_market_news
+  - web3_tech
+  - cryptoEssay
+  - forklog
+startup: # 📈 Стартапы / Продукт
+  - epicgrowth
+  - proproduct
+  - startupoftheday
+  - thebell_io
+science: # 🔬 Наука / Ресёрч
+  - gonzo_ML
+  - nadlskom
+  - prostironauki
+  - bbbreaking_science
+business: # 💼 Бизнес / Экономика
+  - thebell_io
+  - rbc_news
+  - if_market_news
+  - tinkoff_invest_official

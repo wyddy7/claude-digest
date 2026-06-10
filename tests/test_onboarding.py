@@ -1,0 +1,260 @@
+"""Offline unit tests for the B2 onboarding / gating surface.
+
+No network, no Supabase, no PTB application. db.* is monkeypatched; the Telegram
+Update/CallbackQuery/Message/Bot are minimal fakes that record calls. Synthetic
+tg ids only (111111111-style).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+import db as db_module
+import subscriptions as subs_module
+from handlers import middleware as mw
+from handlers import onboarding as onb
+
+OWNER = 111111111
+USER = 222222222
+
+
+# ── fakes ─────────────────────────────────────────────────────────────────────
+
+class FakeMessage:
+    def __init__(self, text=""):
+        self.text = text
+        self.replies = []
+
+    async def reply_text(self, text, **kw):
+        self.replies.append((text, kw))
+        return SimpleNamespace(edit_text=AsyncMock())
+
+
+class FakeQuery:
+    def __init__(self, data, message):
+        self.data = data
+        self.message = message
+        self.answers = []
+
+    async def answer(self, text="", show_alert=False):
+        self.answers.append((text, show_alert))
+
+    async def edit_message_text(self, text, **kw):
+        self.message.replies.append((text, kw))
+
+
+class FakeBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text, **kw):
+        self.sent.append((chat_id, text, kw))
+
+
+class FakeContext:
+    def __init__(self, bot=None):
+        self.user_data = {}
+        self.bot = bot or FakeBot()
+
+
+def make_update(*, tg_user_id=USER, text=None, callback_data=None):
+    msg = FakeMessage(text or "")
+    q = FakeQuery(callback_data, msg) if callback_data is not None else None
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=tg_user_id),
+        message=msg if callback_data is None else None,
+        callback_query=q,
+        effective_message=msg,
+        effective_chat=SimpleNamespace(id=tg_user_id),
+    )
+
+
+# ── invite gate ───────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_invite_gate_blocks_unknown_user(monkeypatch):
+    monkeypatch.setattr(mw, "OWNER_ID", OWNER)
+    monkeypatch.setattr(db_module, "get_user_by_tg_id", AsyncMock(return_value=None))
+    upd = make_update(text="/start")
+    ctx = FakeContext()
+    from telegram.ext import ApplicationHandlerStop
+
+    with pytest.raises(ApplicationHandlerStop):
+        await mw.resolve_user(upd, ctx)
+    assert "приглашению" in upd.message.replies[0][0]
+    assert "user" not in ctx.user_data
+
+
+@pytest.mark.asyncio
+async def test_owner_falls_through(monkeypatch):
+    monkeypatch.setattr(mw, "OWNER_ID", OWNER)
+    get_user = AsyncMock()
+    monkeypatch.setattr(db_module, "get_user_by_tg_id", get_user)
+    upd = make_update(tg_user_id=OWNER, text="/start")
+    ctx = FakeContext()
+    await mw.resolve_user(upd, ctx)  # no raise
+    assert ctx.user_data["is_owner"] is True
+    get_user.assert_not_called()
+
+
+# ── requires_tier ─────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_requires_tier_allows_active_trial():
+    calls = []
+
+    @mw.requires_tier("trial_or_paid")
+    async def handler(update, context):
+        calls.append(True)
+
+    ctx = FakeContext()
+    ctx.user_data["is_owner"] = False
+    ctx.user_data["user"] = {
+        "tg_user_id": USER,
+        "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+    }
+    await handler(make_update(text="x"), ctx)
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_requires_tier_gates_expired(monkeypatch):
+    gate = AsyncMock()
+    import handlers.subscription as sub
+    monkeypatch.setattr(sub, "show_gate", gate)
+    calls = []
+
+    @mw.requires_tier("trial_or_paid")
+    async def handler(update, context):
+        calls.append(True)
+
+    ctx = FakeContext()
+    ctx.user_data["is_owner"] = False
+    ctx.user_data["user"] = {
+        "tg_user_id": USER,
+        "trial_ends_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        "pro_until": None,
+    }
+    await handler(make_update(text="x"), ctx)
+    assert calls == []  # body never ran (no LLM spend)
+    gate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_owner_bypasses_gate():
+    calls = []
+
+    @mw.requires_tier("trial_or_paid")
+    async def handler(update, context):
+        calls.append(True)
+
+    ctx = FakeContext()
+    ctx.user_data["is_owner"] = True
+    await handler(make_update(text="x"), ctx)
+    assert calls == [True]
+
+
+# ── topic merge / cap ─────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_topic_toggle_merges_and_dedups(monkeypatch):
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=15))
+    # Seed topics deterministically.
+    monkeypatch.setattr(onb, "_TOPICS", {"ai": ["a", "b"], "dev": ["b", "c"]})
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+
+    upd = make_update(callback_data="onb|topic|ai")
+    await onb._toggle_topic(upd, ctx, "ai")
+    assert ctx.user_data["onb_channels"] == ["a", "b"]
+
+    upd2 = make_update(callback_data="onb|topic|dev")
+    await onb._toggle_topic(upd2, ctx, "dev")
+    assert ctx.user_data["onb_channels"] == ["a", "b", "c"]  # b deduped
+
+
+@pytest.mark.asyncio
+async def test_topic_merge_respects_cap(monkeypatch):
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=2))
+    monkeypatch.setattr(onb, "_TOPICS", {"ai": ["a", "b", "c", "d"]})
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    upd = make_update(callback_data="onb|topic|ai")
+    await onb._toggle_topic(upd, ctx, "ai")
+    assert ctx.user_data["onb_channels"] == ["a", "b"]  # truncated to cap
+
+
+@pytest.mark.asyncio
+async def test_channels_done_requires_one(monkeypatch):
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    ctx.user_data["onb_channels"] = []
+    upd = make_update(callback_data="onb|ch_done")
+    await onb._channels_done(upd, ctx)
+    assert upd.callback_query.answers[-1][1] is True  # show_alert popup, no advance
+
+
+@pytest.mark.asyncio
+async def test_channels_done_persists_and_advances(monkeypatch):
+    save = AsyncMock()
+    upd_fields = AsyncMock()
+    monkeypatch.setattr(db_module, "save_settings", save)
+    monkeypatch.setattr(db_module, "update_user_fields", upd_fields)
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    ctx.user_data["onb_channels"] = ["chan_a", "chan_b"]
+    upd = make_update(callback_data="onb|ch_done")
+    await onb._channels_done(upd, ctx)
+    save.assert_awaited_once()
+    assert save.await_args.args[1]["channels"] == ["chan_a", "chan_b"]
+    upd_fields.assert_awaited_once()
+    assert upd_fields.await_args.args[1]["onboarding_state"] == onb.ST_FOCUS
+
+
+# ── channel free-text ingest (validation) ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ingest_channels_validates_and_caps(monkeypatch):
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=3))
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    ctx.user_data["onb_substate"] = "typing_channels"
+    upd = make_update(text="@good_one bad! second_good third_one fourth_one")
+    await onb._ingest_channels(upd, ctx)
+    cand = ctx.user_data["onb_channels"]
+    assert "good_one" in cand and "second_good" in cand
+    assert "bad!" not in cand
+    assert len(cand) <= 3  # capped
+
+
+# ── first /start grants trial + advances ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_first_start_grants_trial(monkeypatch):
+    grant = AsyncMock(return_value=True)
+    upd_fields = AsyncMock()
+    monkeypatch.setattr(subs_module, "grant_trial", grant)
+    monkeypatch.setattr(db_module, "update_user_fields", upd_fields)
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"tg_user_id": USER, "id": "uuid-1", "onboarding_state": "invited"}
+    upd = make_update(text="/start")
+    await onb.start(upd, ctx)
+    grant.assert_awaited_once_with(USER)
+    assert upd_fields.await_args.args[1]["onboarding_state"] == onb.ST_CHANNELS
+    assert any("пробный доступ Pro" in r[0] for r in upd.message.replies)
+
+
+@pytest.mark.asyncio
+async def test_done_user_no_wizard_restart(monkeypatch):
+    grant = AsyncMock()
+    monkeypatch.setattr(subs_module, "grant_trial", grant)
+    monkeypatch.setattr(db_module, "load_settings", AsyncMock(return_value={"current_focus": ""}))
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"tg_user_id": USER, "id": "uuid-1", "onboarding_state": "done"}
+    upd = make_update(text="/start")
+    await onb.start(upd, ctx)
+    grant.assert_not_called()  # trial not re-armed
