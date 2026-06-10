@@ -594,7 +594,18 @@ def main():
         .build()
     )
 
-    app.add_handler(TypeHandler(Update, check_owner), group=-1)
+    # resolve_user replaces the single-owner check_owner: owner falls through to
+    # the legacy handlers below; invited non-owners are dispatched to the
+    # handlers/ package and stopped; un-invited users get the invite-only reply.
+    from handlers.middleware import resolve_user
+    from handlers import onboarding as onboarding_surface
+    from handlers import subscription as subscription_surface
+
+    app.add_handler(TypeHandler(Update, resolve_user), group=-1)
+
+    # Non-owner callback surfaces (patterns the owner UI never emits).
+    app.add_handler(CallbackQueryHandler(onboarding_surface.cb, pattern=r"^onb\|"))
+    app.add_handler(CallbackQueryHandler(subscription_surface.cb_buy, pattern=r"^buy\|"))
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_start))
