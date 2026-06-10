@@ -28,6 +28,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    PreCheckoutQueryHandler,
     TypeHandler,
     filters,
 )
@@ -600,6 +601,7 @@ def main():
     from handlers.middleware import resolve_user
     from handlers import onboarding as onboarding_surface
     from handlers import subscription as subscription_surface
+    from handlers import admin as admin_surface
 
     app.add_handler(TypeHandler(Update, resolve_user), group=-1)
 
@@ -624,6 +626,17 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_checkin, pattern=r"^ci_"))
     app.add_handler(CallbackQueryHandler(cb_toggle_autoreset, pattern="^toggle_autoreset$"))
     app.add_handler(CallbackQueryHandler(cb_edit_profile, pattern="^edit_profile$"))
+
+    # --- payments (Stars) ---
+    app.add_handler(CommandHandler("buy", subscription_surface.cmd_buy))
+    app.add_handler(PreCheckoutQueryHandler(subscription_surface.pre_checkout))
+    app.add_handler(MessageHandler(
+        filters.SUCCESSFUL_PAYMENT, subscription_surface.successful_payment
+    ))
+    # --- admin (ADMIN_ID-gated; non-admins silently ignored) ---
+    app.add_handler(CommandHandler("give_pro", admin_surface.cmd_give_pro))
+    app.add_handler(CommandHandler("revoke_pro", admin_surface.cmd_revoke_pro))
+    app.add_handler(CommandHandler("grant_trial", admin_surface.cmd_grant_trial))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)

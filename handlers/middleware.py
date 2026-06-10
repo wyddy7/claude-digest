@@ -71,6 +71,11 @@ async def resolve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from handlers import onboarding as onboarding_surface
         from handlers import chat as chat_surface
 
+        # Payment surfaces must reach non-owners: let the Stars success service
+        # message and the /buy command fall through to their dedicated handlers.
+        if update.message.successful_payment or (update.message.text or "").startswith("/buy"):
+            return
+
         msg_text = update.message.text or ""
         state = row.get("onboarding_state") or "new"
         if msg_text.startswith("/start") or state not in {"done", "active"}:

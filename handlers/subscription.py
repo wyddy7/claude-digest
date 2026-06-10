@@ -1,16 +1,24 @@
-"""Surface 7 — 💎 Подписка / paywall (stub; invoices land in B3).
+"""Surface 7 — 💎 Подписка / paywall + Telegram Stars purchase flow.
 
-Shows trial/sub status from subscriptions.py and the post-trial gate message.
-NO Telegram Stars invoice is built here yet — the buy buttons and PreCheckout /
-successful_payment handlers are B3. Clear TODO seams mark where they attach.
+Shows trial/sub status from subscriptions.py and the post-trial gate, then the
+two-product buy block (monthly + quarterly). Tapping a buy button builds a
+Telegram Stars invoice (currency XTR, provider_token="") whose payload is the
+product key the success handler switches on. PreCheckout answers unconditionally;
+the SuccessfulPayment handler applies an idempotent grant (see SPEC-payments §3).
 
-User-facing strings are Russian per SPEC-ux §3. Prices shown in the buy screen
-are resolved from DB tier defaults at render time (never inline constants).
+User-facing strings are Russian per SPEC-ux §3. Star prices/anchors render from
+DB tier defaults at build time (never inline constants). The only literals here
+are payload identifiers and the XTR currency code.
 """
 
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LabeledPrice,
+    Update,
+)
 from telegram.ext import ContextTypes
 
 import db
@@ -19,18 +27,22 @@ import subscriptions
 logger = logging.getLogger(__name__)
 
 
-# TODO(B3): replace these no-op buy buttons with callback_data="buy|digest_pro_month"
-# / "buy|digest_pro_quarter" wired to the Stars invoice flow (PreCheckoutQuery +
-# successful_payment handlers live in this module). For now they answer with an
-# info popup so the surface is reachable and shows the plan without charging.
+# ─── buy block (prices + anchors read from DB tier_defaults) ──────────────────
+
 async def _buy_keyboard() -> InlineKeyboardMarkup:
-    """Buy block. Reads star prices from the DB pro-tier defaults (no constants).
-    Buttons are inert in this stub (callback buy|soon)."""
+    """Buy block. Star prices come from the DB pro-tier defaults (no constants).
+    Buttons carry the product-key callbacks the invoice flow switches on."""
     price_month = await db.get_tier_default("pro", "price_month_stars", "—")
     price_quarter = await db.get_tier_default("pro", "price_quarter_stars", "—")
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Месяц · {price_month}⭐", callback_data="buy|soon")],
-        [InlineKeyboardButton(f"Квартал · {price_quarter}⭐", callback_data="buy|soon")],
+        [InlineKeyboardButton(
+            f"💎 Pro — месяц · {price_month}⭐",
+            callback_data="buy|digest_pro_month",
+        )],
+        [InlineKeyboardButton(
+            f"💎 Pro — 3 месяца · {price_quarter}⭐",
+            callback_data="buy|digest_pro_quarter",
+        )],
         [InlineKeyboardButton("ℹ️ Чем отличаются планы", callback_data="buy|info_tiers")],
         [InlineKeyboardButton("ℹ️ Как платить через Wallet", callback_data="buy|info_wallet")],
     ])
@@ -39,16 +51,26 @@ async def _buy_keyboard() -> InlineKeyboardMarkup:
 async def _buy_text() -> str:
     price_month = await db.get_tier_default("pro", "price_month_stars", "—")
     price_quarter = await db.get_tier_default("pro", "price_quarter_stars", "—")
+    anchor_month = await db.get_tier_default("pro", "anchor_month_stars", None)
+    anchor_quarter = await db.get_tier_default("pro", "anchor_quarter_stars", None)
+    month_line = f"▸ Месяц — {price_month}⭐"
+    if anchor_month:
+        month_line += f"  (~~{anchor_month}~~)"
+    quarter_line = f"▸ Квартал — {price_quarter}⭐  (выгоднее)"
+    if anchor_quarter:
+        quarter_line += f"  (~~{anchor_quarter}~~)"
     return (
         "💎 <b>Оформить подписку</b>\n\n"
         "Pro — всё, что нужно для ежедневного дайджеста:\n"
         "• до 15 каналов • кастомный фокус • история без лимита\n\n"
-        f"▸ Месяц — {price_month}⭐\n"
-        f"▸ Квартал — {price_quarter}⭐  (выгоднее)\n\n"
+        f"{month_line}\n"
+        f"{quarter_line}\n\n"
         "💡 Дешевле всего через Telegram Wallet / TON — там нет наценки\n"
         "   App Store. Через iOS-приложение Stars дороже на ~30%."
     )
 
+
+# ─── status / gate surfaces ───────────────────────────────────────────────────
 
 async def show_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """💎 Подписка entry. Branches by state: active trial/sub status, else buy."""
@@ -83,8 +105,8 @@ async def show_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Post-trial unpaid gate (SPEC-ux §3.5). Reachable from the @requires_tier
-    decorator when a non-owner's trial/sub is inactive. Text only here — buy
-    buttons are shown so the surface is the unlock path."""
+    decorator when a non-owner's trial/sub is inactive. Buy buttons are shown so
+    the surface is the unlock path."""
     text = (
         "🔒 <b>Pro-триал закончился</b>\n\n"
         "Чтобы снова получать ежедневный дайджест, оформи подписку 👇\n"
@@ -102,9 +124,54 @@ async def show_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ─── invoice trigger (💎 buttons + /buy) ──────────────────────────────────────
+
+async def send_pro_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                           product_key: str) -> None:
+    """Build + send a Telegram Stars invoice for product_key. Price and length
+    come from DB tier defaults (subscriptions.product_invoice_fields). Stars flags:
+    provider_token="" (empty, not None) + currency="XTR". payload == product_key —
+    the success handler switches on it (never parses the amount)."""
+    spec = subscriptions.PRODUCTS.get(product_key)
+    if spec is None:
+        logger.warning("send_pro_invoice: unknown product_key %r", product_key)
+        return
+    tg_user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    price_stars, _days, title, description = await subscriptions.product_invoice_fields(
+        tg_user_id, spec["tier"], spec["period"]
+    )
+
+    await context.bot.send_invoice(
+        chat_id=chat_id,
+        title=title,
+        description=description,
+        payload=product_key,
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label=title, amount=price_stars)],
+    )
+
+
+async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/buy [month|quarter] — invoice fallback. No arg → monthly. Unknown arg →
+    list the two valid options."""
+    args = context.args or []
+    arg = args[0].lower() if args else "month"
+    mapping = {"month": "digest_pro_month", "quarter": "digest_pro_quarter"}
+    product_key = mapping.get(arg)
+    if product_key is None:
+        await update.effective_message.reply_text(
+            "Доступно: /buy month или /buy quarter"
+        )
+        return
+    await send_pro_invoice(update, context, product_key)
+
+
 async def cb_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the buy| callbacks. In this stub the purchase buttons are inert —
-    they explain that payments arrive next; the info popups are live."""
+    """Handle the buy| callbacks. Product-key callbacks open a Stars invoice; the
+    info callbacks answer with a popup (no new screen)."""
     q = update.callback_query
     arg = q.data.split("|", 1)[1] if "|" in q.data else ""
     if arg == "info_wallet":
@@ -119,7 +186,45 @@ async def cb_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Power (позже) — без лимита каналов, до 3 дайджестов, приватные каналы.",
             show_alert=True,
         )
+    elif arg in subscriptions.PRODUCTS:
+        await q.answer()
+        await send_pro_invoice(update, context, arg)
     else:
-        # TODO(B3): build the Telegram Stars invoice (currency XTR, payload encodes
-        # tg_user_id + plan) here instead of this placeholder.
-        await q.answer("Оплата подключается в ближайшем обновлении 🙌", show_alert=True)
+        await q.answer()
+
+
+# ─── Stars payment handlers ───────────────────────────────────────────────────
+
+async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Answer the pre-checkout query unconditionally — a subscription has no stock
+    to verify, and the 10s Telegram window must be met."""
+    await update.pre_checkout_query.answer(ok=True)
+
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Apply an idempotent grant on SuccessfulPayment and ACK the user either way.
+
+    The ledger-insert-first / grant-second / rollback-on-failure ordering lives in
+    subscriptions.apply_successful_payment (SPEC-payments §3). A duplicate delivery
+    re-acks without a second grant; a hard DB failure propagates to error_handler
+    so the un-ledgered charge retries cleanly on the next delivery."""
+    sp = update.message.successful_payment
+    tg_user_id = update.effective_user.id
+
+    result = await subscriptions.apply_successful_payment(
+        tg_user_id=tg_user_id,
+        payload=sp.invoice_payload,
+        telegram_payment_charge_id=sp.telegram_payment_charge_id,
+        total_amount=sp.total_amount,
+    )
+
+    if result.granted:
+        await update.message.reply_text(
+            "🎉 Pro активирован.\n"
+            f"Подписка активна до {result.active_until_human}."
+        )
+    else:
+        await update.message.reply_text(
+            "Платёж уже учтён ✅\n"
+            f"Подписка активна до {result.active_until_human}."
+        )
