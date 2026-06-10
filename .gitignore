@@ -7,6 +7,10 @@ data/*.json
 data.json
 digests_history.json
 
-# scratch / debug logs (kept locally, ignored by git)
+# scratch / debug logs + local dev scripts (kept locally, ignored by git)
 log.md
 test1.md
+try_reader.py
+diag_reader.py
+golden-baseline-*.md
+new-output-*.md
