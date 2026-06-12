@@ -12,6 +12,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import db
+from agent import run_chat_turn
 from handlers import digest as digest_surface
 from handlers import history as history_surface
 from handlers import onboarding as onboarding_surface
@@ -25,10 +26,16 @@ from handlers.strings import (
     BTN_PROFILE,
     BTN_SETTINGS,
     BTN_SUBSCRIPTION,
+    CHAT_ERROR,
+    CHAT_LIMIT_HIT,
+    CHAT_THINKING,
     FALLBACK,
 )
 
 logger = logging.getLogger(__name__)
+
+# DB fallback if chat_turns_per_month is somehow absent from tier_defaults.
+_CHAT_TURNS_FALLBACK = 50
 
 
 async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,13 +87,68 @@ async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await history_surface.show_history(update, context)
         return
 
-    # 5) Fallback — re-show the menu so the user is never stuck.
+    # 5) Free-text → chat-with-digest agent (per-user thread + user-scoped tools).
     user = context.user_data.get("user")
-    focus = ""
     if user:
+        await _chat_with_digest(update, context, user)
+        return
+
+    # No resolved user (defensive — middleware normally guarantees one). Re-show
+    # the menu so the user is never stuck.
+    await update.message.reply_text(FALLBACK, reply_markup=main_kb_saas(""))
+
+
+async def _chat_with_digest(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
+    """Route a free-text message to the conversational agent for THIS user.
+
+    The agent runs on a MemorySaver thread keyed by the user's tg id (so tenants
+    never share conversation state) and with tools scoped to the user's own
+    digests/focus. The chat_turns_per_month quota is enforced from the DB
+    (get_effective_limit) before any LLM spend; over-limit users get a friendly
+    capped reply and the agent is never invoked.
+    """
+    user_id = user["id"]
+    tg_user_id = user["tg_user_id"]
+    text = (update.message.text or "").strip()
+
+    # Quota gate — limit from DB, current usage from the per-user monthly counter.
+    cap = await db.get_effective_limit(user_id, "chat_turns_per_month", _CHAT_TURNS_FALLBACK)
+    try:
+        cap = int(cap)
+    except (TypeError, ValueError):
+        cap = _CHAT_TURNS_FALLBACK
+    used = await db.count_chat_turns_this_month(user_id)
+    if cap >= 0 and used >= cap:
+        await update.message.reply_text(CHAT_LIMIT_HIT.format(cap=cap))
+        return
+
+    checkpointer = context.application.bot_data.get("checkpointer")
+    if checkpointer is None:
+        logger.warning("chat agent: no checkpointer in bot_data; cannot run turn")
+        await update.message.reply_text(CHAT_ERROR)
+        return
+
+    status_msg = await update.message.reply_text(CHAT_THINKING)
+    try:
+        reply = await run_chat_turn(
+            tg_user_id, text, checkpointer, scope_user_id=user_id
+        )
+        # Count the turn only after a real invocation (gate failures don't burn quota).
         try:
-            settings = await db.load_settings(user["id"])
-            focus = settings.get("current_focus") or ""
+            await db.record_chat_turn(user_id)
+        except Exception as exc:
+            logger.warning("record_chat_turn failed (non-fatal): %s", exc)
+    except Exception as exc:
+        logger.warning("chat agent turn failed for %s: %s", tg_user_id, exc)
+        try:
+            await status_msg.edit_text(CHAT_ERROR)
         except Exception:
-            focus = ""
-    await update.message.reply_text(FALLBACK, reply_markup=main_kb_saas(focus))
+            await update.message.reply_text(CHAT_ERROR)
+        return
+
+    try:
+        await status_msg.edit_text(reply)
+    except Exception:
+        # Edit failed (e.g. message too old) — send a fresh plain message so the
+        # user still gets the answer. Plain text matches the legacy owner path.
+        await update.message.reply_text(reply)

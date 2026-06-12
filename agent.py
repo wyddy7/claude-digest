@@ -96,10 +96,12 @@ def _matches_query(query: str, content: str) -> bool:
     return matched / len(q_tokens) >= SEARCH_TOKEN_COVERAGE
 
 
-@tool
-async def search_digest_history(query: str) -> list[dict]:
-    """Search past digests by keyword. Returns matching entries (date, snippet)."""
-    history = await db.load_history()
+GET_RECENT_DIGESTS_PER_ITEM_CAP = 8000  # sanity bound, not a normal-case limit
+
+
+def _search_digest_history_results(history: list[dict], query: str) -> list[dict]:
+    """Pure: filter a list of digest rows by query. Shared by the global and the
+    per-user (scoped) tool so the matching logic lives in one place."""
     results = []
     for item in history:
         if item.get("is_error"):
@@ -114,16 +116,10 @@ async def search_digest_history(query: str) -> list[dict]:
     return results[-10:]
 
 
-GET_RECENT_DIGESTS_PER_ITEM_CAP = 8000  # sanity bound, not a normal-case limit
-
-
-@tool
-async def get_recent_digests(n: int = 3) -> list[dict]:
-    """Return the N most recent digest entries with date and content."""
-    history = await db.load_history(limit=n)
-    # Truncating tool returns to 600 chars is what caused the 2026-05-05
-    # "no mention in history" miss. Cap is a sanity bound for pathological
-    # digests (~10x typical body), not a normal-case limit.
+def _recent_digests_payload(history: list[dict]) -> list[dict]:
+    """Pure: shape recent digest rows for the tool return. Truncating tool returns
+    to 600 chars is what caused the 2026-05-05 "no mention in history" miss; the
+    cap is a sanity bound for pathological digests (~10x typical body)."""
     return [
         {
             "id": h.get("id"),
@@ -134,6 +130,22 @@ async def get_recent_digests(n: int = 3) -> list[dict]:
     ]
 
 
+# ── legacy/global tools (owner single-tenant path; user_id=None) ──────────────
+
+@tool
+async def search_digest_history(query: str) -> list[dict]:
+    """Search past digests by keyword. Returns matching entries (date, snippet)."""
+    history = await db.load_history()
+    return _search_digest_history_results(history, query)
+
+
+@tool
+async def get_recent_digests(n: int = 3) -> list[dict]:
+    """Return the N most recent digest entries with date and content."""
+    history = await db.load_history(limit=n)
+    return _recent_digests_payload(history)
+
+
 @tool
 async def get_current_focus() -> str:
     """Return the user's current digest focus (if any)."""
@@ -141,24 +153,60 @@ async def get_current_focus() -> str:
     return data.get("current_focus", "") or "не задан"
 
 
+# ── per-user (tenant-scoped) tool factory ─────────────────────────────────────
+
+def _make_user_scoped_tools(user_id: str) -> list:
+    """Build the chat tools bound to ONE tenant's data. The agent never sees a
+    user_id argument — it is closed over here — so a tenant can only ever read
+    their own digests/focus (db.load_user_history / db.load_settings, scoped by
+    user_id), never the legacy global db.load()/db.load_history()."""
+
+    @tool
+    async def search_digest_history(query: str) -> list[dict]:
+        """Search past digests by keyword. Returns matching entries (date, snippet)."""
+        history = await db.load_user_history(user_id)
+        return _search_digest_history_results(history, query)
+
+    @tool
+    async def get_recent_digests(n: int = 3) -> list[dict]:
+        """Return the N most recent digest entries with date and content."""
+        history = await db.load_user_history(user_id, limit=n)
+        return _recent_digests_payload(history)
+
+    @tool
+    async def get_current_focus() -> str:
+        """Return the user's current digest focus (if any)."""
+        settings = await db.load_settings(user_id)
+        return settings.get("current_focus", "") or "не задан"
+
+    return [search_digest_history, get_recent_digests, get_current_focus]
+
+
 # ─── Chat agent factory ───────────────────────────────────────────────────────
 
-def create_chat_agent(system_prompt: str, checkpointer):
-    """Stateful conversational agent with Supabase-backed memory."""
+def create_chat_agent(system_prompt: str, checkpointer, user_id: str | None = None):
+    """Stateful conversational agent with checkpointer-backed memory.
+
+    user_id: the tenant's UUID. When given, the agent's tools are scoped to that
+    tenant's data (db.load_user_history / db.load_settings). When None (legacy
+    owner single-tenant path), the global tools over db.load()/db.load_history()
+    are used. There is no shared mutable tool state — scoped tools are fresh
+    closures per call."""
     system = system_prompt + (
         "\n\nYou have access to tools to search past digests and get context. "
         "Use search_digest_history when the user asks about past topics. "
         "Use get_recent_digests to reference what was covered recently. "
         "Use get_current_focus to understand what the user is currently focused on."
     )
+    tools = (
+        _make_user_scoped_tools(user_id)
+        if user_id is not None
+        else [search_digest_history, get_recent_digests, get_current_focus]
+    )
     return create_deep_agent(
         model=_make_model("chat"),
         system_prompt=system,
-        tools=[
-            search_digest_history,
-            get_recent_digests,
-            get_current_focus,
-        ],
+        tools=tools,
         checkpointer=checkpointer,
     )
 
@@ -375,16 +423,37 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     }
 
 
-async def run_chat_turn(user_id: int, message: str, checkpointer) -> str:
+async def run_chat_turn(
+    user_id: int, message: str, checkpointer, *, scope_user_id: str | None = None
+) -> str:
     """
     Run one chat turn. checkpointer lifecycle managed in bot.py post_init/post_shutdown.
+
+    user_id:       thread key (the numeric Telegram user id) — MemorySaver keys
+                   per-user conversation state on this, so tenants never share a
+                   chat thread.
+    scope_user_id: the tenant's UUID. When given, the system prompt + agent tools
+                   read ONLY that tenant's settings/history (db.load_settings /
+                   db.load_user_history). When None, the legacy single-tenant
+                   global state (db.load/db.load_history) is used (owner path).
     """
-    data = await db.load()
-    user_data = data.copy()
-    user_data["openrouter_key"] = os.getenv("OPENROUTER_KEY")
-    recent = await db.load_history(limit=3)
+    if scope_user_id is not None:
+        settings = await db.load_settings(scope_user_id)
+        user_data = {
+            "current_focus": settings.get("current_focus") or "",
+            "interaction_history": settings.get("interaction_history") or [],
+            "openrouter_key": os.getenv("OPENROUTER_KEY"),
+        }
+        # load_user_history is newest-first; build_system_prompt/get_recent_digests
+        # expect oldest-first (the legacy load_history(limit=) contract), so reverse.
+        recent = list(reversed(await db.load_user_history(scope_user_id, limit=3)))
+    else:
+        data = await db.load()
+        user_data = data.copy()
+        user_data["openrouter_key"] = os.getenv("OPENROUTER_KEY")
+        recent = await db.load_history(limit=3)
     system_prompt = build_system_prompt(user_data, recent_digests=recent)
-    agent = create_chat_agent(system_prompt, checkpointer)
+    agent = create_chat_agent(system_prompt, checkpointer, user_id=scope_user_id)
     config = {"configurable": {"thread_id": str(user_id)}}
 
     try:

@@ -347,6 +347,51 @@ async def save_settings(user_id: str, fields: dict) -> dict:
     return rows[0] if rows else {}
 
 
+# ─── multi-tenant: monthly chat-turn usage counter ────────────────────────────
+#
+# chat_turns_per_month is enforced at the call site via get_effective_limit. The
+# running count is persisted per-user inside user_settings.personalization under a
+# reserved "_usage" namespace, keyed by calendar month (UTC). This avoids a new
+# table/migration; build_pipeline_config ignores unknown personalization keys, so
+# the counter never leaks into the digest pipeline.
+
+_USAGE_KEY = "_usage"
+_CHAT_TURNS_KEY = "chat_turns"
+
+
+def _current_usage_month() -> str:
+    """Calendar month bucket (UTC), e.g. '2026-06'. The reset boundary."""
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+async def count_chat_turns_this_month(user_id: str) -> int:
+    """Return how many chat turns this user has spent in the current UTC month.
+    Reads the reserved personalization._usage.chat_turns[<month>] counter; absent
+    months count as 0 (the month rolled over → fresh quota)."""
+    settings = await load_settings(user_id)
+    usage = (settings.get("personalization") or {}).get(_USAGE_KEY) or {}
+    by_month = usage.get(_CHAT_TURNS_KEY) or {}
+    return int(by_month.get(_current_usage_month(), 0) or 0)
+
+
+async def record_chat_turn(user_id: str) -> int:
+    """Increment this user's chat-turn counter for the current month and persist
+    it. Returns the new count. Old months are pruned so the blob can't grow
+    unbounded."""
+    settings = await load_settings(user_id)
+    personalization = dict(settings.get("personalization") or {})
+    usage = dict(personalization.get(_USAGE_KEY) or {})
+    by_month = dict(usage.get(_CHAT_TURNS_KEY) or {})
+
+    month = _current_usage_month()
+    new_count = int(by_month.get(month, 0) or 0) + 1
+    # Keep only the current month — past months are dead weight.
+    usage[_CHAT_TURNS_KEY] = {month: new_count}
+    personalization[_USAGE_KEY] = usage
+    await save_settings(user_id, {"personalization": personalization})
+    return new_count
+
+
 async def update_user_fields(tg_user_id: int, fields: dict) -> bool:
     """UPDATE the users row (by tg_user_id) with the given fields. Returns True if
     a row was updated. Used by subscription mutators (pro_until/trial_*)."""
