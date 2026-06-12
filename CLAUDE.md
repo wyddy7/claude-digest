@@ -135,4 +135,4 @@ without read-merge-write (the `_usage` counter lives in the same JSONB).
 
 ## License
 
-MIT — see `LICENSE`.
+AGPL-3.0 — see `LICENSE`. Versions up to commit `4092c1a` remain MIT.

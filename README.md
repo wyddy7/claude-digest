@@ -135,4 +135,9 @@ uv run test_smoke.py                   # live (needs real credentials)
 
 ## License
 
-MIT.
+AGPL-3.0 — see `LICENSE`. Self-hosting is free and supported (see Setup
+above). If you run a modified version as a network service, the AGPL
+requires you to offer its source to your users.
+
+Versions up to and including commit `4092c1a` were published under MIT
+and remain MIT.
