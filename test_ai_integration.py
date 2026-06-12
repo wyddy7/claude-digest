@@ -233,7 +233,10 @@ try:
         if not src_path.exists():
             continue
         source = src_path.read_text(encoding="utf-8", errors="replace")
-        for m in _re.finditer(r"^(?:from|import)\s+(\w+)", source, _re.MULTILINE):
+        # NB: \s* leading match so LAZY imports inside functions (indented, e.g.
+        # `    import pricing` in db.py) are also checked — a top-of-line-only regex
+        # silently missed pricing.py and broke /stats in prod (deploy 85b152f).
+        for m in _re.finditer(r"^\s*(?:from|import)\s+(\w+)", source, _re.MULTILINE):
             mod = m.group(1)
             if mod in local_modules and f"{mod}.py" not in copied_files:
                 missing.append(f"{mod}.py (imported by {src})")
