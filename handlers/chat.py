@@ -17,18 +17,18 @@ from handlers import digest as digest_surface
 from handlers import onboarding as onboarding_surface
 from handlers import profile as profile_surface
 from handlers import subscription as subscription_surface
-from handlers.menu import (
+from handlers.menu import main_kb_saas
+from handlers.strings import (
     BTN_DIGEST,
     BTN_HISTORY,
     BTN_PROFILE,
     BTN_SETTINGS,
     BTN_SUBSCRIPTION,
-    main_kb_saas,
+    FALLBACK,
+    SOON,
 )
 
 logger = logging.getLogger(__name__)
-
-_SOON = "Этот раздел скоро откроется здесь. Пока доступны 📰 Дайджест, 👤 Профиль и 💎 Подписка."
 
 
 async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,7 +52,7 @@ async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await profile_surface.show_profile(update, context)
         return
     if text == BTN_HISTORY or text == BTN_SETTINGS or text.startswith("🎯"):
-        await update.message.reply_text(_SOON)
+        await update.message.reply_text(SOON)
         return
 
     # 3) Fallback — re-show the menu so the user is never stuck.
@@ -64,6 +64,4 @@ async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             focus = settings.get("current_focus") or ""
         except Exception:
             focus = ""
-    await update.message.reply_text(
-        "Не понял команду. Меню снизу 👇", reply_markup=main_kb_saas(focus)
-    )
+    await update.message.reply_text(FALLBACK, reply_markup=main_kb_saas(focus))

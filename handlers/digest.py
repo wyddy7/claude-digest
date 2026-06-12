@@ -17,6 +17,7 @@ import httpx
 import db
 from agent import run_digest_pipeline
 from handlers.middleware import requires_tier
+from handlers.strings import DIGEST_COLLECTING, DIGEST_ERROR
 from personalization import load_personalization
 from pipeline_config import build_pipeline_config, make_openrouter_client
 
@@ -89,9 +90,7 @@ async def send_digest(update, context):
     """📰 Дайджест for a non-owner user. Gated: an expired user is intercepted by
     the decorator (paywall) and this body never runs (no LLM spend)."""
     user = context.user_data["user"]
-    status_msg = await update.effective_message.reply_text(
-        "⏳ Собираю дайджест по твоим каналам…"
-    )
+    status_msg = await update.effective_message.reply_text(DIGEST_COLLECTING)
 
     async def _on_status(text: str):
         try:
@@ -103,6 +102,4 @@ async def send_digest(update, context):
         await deliver_digest(context.bot, user, on_status=_on_status)
     except Exception as e:
         logger.warning("send_digest failed for %s: %s", user.get("tg_user_id"), e)
-        await update.effective_message.reply_text(
-            "⚠️ Не удалось собрать дайджест — попробуй ещё раз чуть позже."
-        )
+        await update.effective_message.reply_text(DIGEST_ERROR)

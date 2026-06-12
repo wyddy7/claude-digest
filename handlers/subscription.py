@@ -23,6 +23,14 @@ from telegram.ext import ContextTypes
 
 import db
 import subscriptions
+from handlers.strings import (
+    SUB_BUY_BODY_HEADER,
+    SUB_BUY_WALLET_TIP,
+    SUB_GATE_EXPIRED,
+    SUB_PAYMENT_DUPLICATE,
+    SUB_PAYMENT_GRANTED,
+    SUB_TRIAL_HEADER_TEMPLATE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +68,10 @@ async def _buy_text() -> str:
     if anchor_quarter:
         quarter_line += f"  (~~{anchor_quarter}~~)"
     return (
-        "💎 <b>Оформить подписку</b>\n\n"
-        "Pro — всё, что нужно для ежедневного дайджеста:\n"
-        "• до 15 каналов • кастомный фокус • история без лимита\n\n"
-        f"{month_line}\n"
-        f"{quarter_line}\n\n"
-        "💡 Дешевле всего через Telegram Wallet / TON — там нет наценки\n"
-        "   App Store. Через iOS-приложение Stars дороже на ~30%."
+        SUB_BUY_BODY_HEADER
+        + f"{month_line}\n"
+        + f"{quarter_line}\n\n"
+        + SUB_BUY_WALLET_TIP
     )
 
 
@@ -85,12 +90,9 @@ async def show_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from datetime import datetime, timezone
 
         days_left = max(0, (until - datetime.now(timezone.utc)).days)
-        header = (
-            "💎 <b>Подписка</b>\n\n"
-            "Статус: Pro-триал 🎁\n"
-            f"Осталось: {days_left} дн. (до {until.strftime('%Y-%m-%d')})\n\n"
-            "Всё открыто: 15 каналов, кастомный фокус, расширенная история.\n"
-            "Когда триал закончится — выбери план, чтобы не потерять доступ."
+        header = SUB_TRIAL_HEADER_TEMPLATE.format(
+            days_left=days_left,
+            until_date=until.strftime("%Y-%m-%d"),
         )
         await message.reply_text(
             header, parse_mode="HTML", reply_markup=await _buy_keyboard()
@@ -107,11 +109,7 @@ async def show_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Post-trial unpaid gate (SPEC-ux §3.5). Reachable from the @requires_tier
     decorator when a non-owner's trial/sub is inactive. Buy buttons are shown so
     the surface is the unlock path."""
-    text = (
-        "🔒 <b>Pro-триал закончился</b>\n\n"
-        "Чтобы снова получать ежедневный дайджест, оформи подписку 👇\n"
-        "(твои каналы и фокус сохранены)"
-    )
+    text = SUB_GATE_EXPIRED
     kb = await _buy_keyboard()
     if update.callback_query:
         await update.callback_query.answer()
@@ -220,11 +218,9 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if result.granted:
         await update.message.reply_text(
-            "🎉 Pro активирован.\n"
-            f"Подписка активна до {result.active_until_human}."
+            SUB_PAYMENT_GRANTED.format(active_until=result.active_until_human)
         )
     else:
         await update.message.reply_text(
-            "Платёж уже учтён ✅\n"
-            f"Подписка активна до {result.active_until_human}."
+            SUB_PAYMENT_DUPLICATE.format(active_until=result.active_until_human)
         )

@@ -21,15 +21,14 @@ from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 import db
 import subscriptions
+from handlers.strings import INVITE_ONLY
 
 logger = logging.getLogger(__name__)
 
 OWNER_ID = int(os.getenv("CHAT_ID", "0"))
 
-INVITE_ONLY_TEXT = (
-    "🔒 Бот работает по приглашению. "
-    "Напиши владельцу, чтобы получить доступ."
-)
+# Keep the old name as an alias so any external references still work.
+INVITE_ONLY_TEXT = INVITE_ONLY
 
 
 def is_owner(tg_user_id: int) -> bool:
@@ -54,9 +53,9 @@ async def resolve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         # No invite row exists. Politely refuse and stop — no row is created.
         if update.callback_query:
-            await update.callback_query.answer(INVITE_ONLY_TEXT, show_alert=True)
+            await update.callback_query.answer(INVITE_ONLY, show_alert=True)
         elif update.message:
-            await update.message.reply_text(INVITE_ONLY_TEXT)
+            await update.message.reply_text(INVITE_ONLY)
         raise ApplicationHandlerStop
 
     context.user_data["user"] = row

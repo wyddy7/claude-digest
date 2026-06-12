@@ -24,6 +24,17 @@ from telegram.ext import ContextTypes
 import db
 import subscriptions
 from handlers.menu import main_kb_saas
+from handlers.strings import (
+    ONBOARDING_CHANNELS_MIN_ERROR,
+    ONBOARDING_FOCUS,
+    ONBOARDING_FOCUS_OWN_PROMPT,
+    ONBOARDING_MENU_READY,
+    ONBOARDING_OWN_CHANNELS_PROMPT,
+    ONBOARDING_PREVIEW_CLOSE,
+    ONBOARDING_PREVIEW_FAIL,
+    ONBOARDING_PREVIEW_PRE,
+    ONBOARDING_WELCOME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +112,7 @@ def _welcome_kb() -> InlineKeyboardMarkup:
     ])
 
 
-WELCOME_TEXT = (
-    "Привет 👋 Это твой персональный AI-дайджест.\n\n"
-    "Каждый день в 13:00 он собирает посты из выбранных каналов, "
-    "отфильтровывает рекламу и шум, и присылает выжимку «по делу» — "
-    "плюс блок «Лично тебе»: что из новостей касается твоей работы.\n\n"
-    "Тебе активирован пробный доступ Pro на 3 дня. Настроим за 2 шага 👇"
-)
+WELCOME_TEXT = ONBOARDING_WELCOME  # canonical text lives in handlers.strings
 
 
 def _channels_kb(context) -> InlineKeyboardMarkup:
@@ -149,11 +154,7 @@ def _focus_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-FOCUS_TEXT = (
-    "Шаг 2 из 2 — Фокус (необязательно)\n\n"
-    "Есть тема, на которой держать акцент? Я подниму такие посты выше.\n"
-    "Можно пропустить — тогда приоритет по общей значимости."
-)
+FOCUS_TEXT = ONBOARDING_FOCUS  # canonical text lives in handlers.strings
 
 
 # ── entry: /start ─────────────────────────────────────────────────────────────
@@ -209,7 +210,7 @@ async def _show_menu(update, context):
     except Exception:
         focus = ""
     await update.effective_message.reply_text(
-        "Меню снизу 👇", reply_markup=main_kb_saas(focus)
+        ONBOARDING_MENU_READY, reply_markup=main_kb_saas(focus)
     )
 
 
@@ -265,9 +266,7 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         context.user_data["onb_substate"] = "typing_channels"
         await q.message.reply_text(
-            "Пришли юзернеймы каналов через пробел или с новой строки, без @.\n"
-            "Пример: durov_russia data_secrets\n\n"
-            "Или вернись к темам:",
+            ONBOARDING_OWN_CHANNELS_PROMPT,
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("← К темам", callback_data="onb|back_topics")]]
             ),
@@ -292,7 +291,7 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "focus_own":
         await q.answer()
         context.user_data["onb_substate"] = "typing_focus"
-        await q.message.reply_text("Напиши свой фокус одной фразой:")
+        await q.message.reply_text(ONBOARDING_FOCUS_OWN_PROMPT)
         return
 
     if action == "focus_skip":
@@ -345,7 +344,7 @@ async def _channels_done(update, context):
     user = context.user_data["user"]
     candidate = _candidate(context)
     if not candidate:
-        await q.answer("Выбери хотя бы одну тему или добавь свой канал 🙂", show_alert=True)
+        await q.answer(ONBOARDING_CHANNELS_MIN_ERROR, show_alert=True)
         return
     await q.answer()
     await db.save_settings(user["id"], {"channels": candidate})
@@ -419,19 +418,10 @@ async def _set_focus_from_text(update, context, focus_text: str):
 
 # ── step 3: immediate preview digest ──────────────────────────────────────────
 
-PREVIEW_PRE = (
-    "Готово ✅ Собираю первый дайджест по твоим каналам за последние 24 часа.\n"
-    "Это займёт ~30–60 секунд…"
-)
-PREVIEW_CLOSE = (
-    "Вот так это выглядит каждый день в 13:00 (МСК) 📰\n\n"
-    "Сейчас у тебя Pro-триал — 3 дня всё открыто.\n"
-    "Меню снизу 👇  • Каналы и модели — в ⚙️  • Подписка — в 💎"
-)
-PREVIEW_FAIL = (
-    "⚠️ За последние 24 часа в выбранных каналах пусто или случилась ошибка. "
-    "Каналы уже сохранены — основной дайджест придёт в 13:00, или жми 📰 в любой момент."
-)
+# Kept as module-level aliases for any external references; canonical text in handlers.strings.
+PREVIEW_PRE = ONBOARDING_PREVIEW_PRE
+PREVIEW_CLOSE = ONBOARDING_PREVIEW_CLOSE
+PREVIEW_FAIL = ONBOARDING_PREVIEW_FAIL
 
 
 async def _run_preview(update, context):
