@@ -157,13 +157,10 @@ async def append_user_digest(user_id: str, digest_html: str, posts_count: int) -
     """Insert a digest row scoped to a tenant (user_id FK). The user_id column
     was added in migration 003; legacy rows without user_id are unaffected.
     is_error is derived from the digest body prefix to mirror the legacy path."""
-    import pytz
-    moscow = pytz.timezone("Europe/Moscow")
-    now_msk = datetime.now(moscow)
     is_error = digest_html.startswith("Ошибка") or digest_html.startswith("Не нашёл")
     await _get_client().table("digests").insert({
         "user_id": user_id,
-        "date": now_msk.strftime("%Y-%m-%d"),
+        "date": _digest_day_msk(),  # single source of the day bucket (see count_user_digests_today)
         "digest_html": digest_html,
         "posts_count": posts_count,
         "is_error": is_error,
@@ -358,6 +355,69 @@ async def record_chat_turn(user_id: str) -> int:
     personalization[_USAGE_KEY] = usage
     await save_settings(user_id, {"personalization": personalization})
     return new_count
+
+
+# ─── feature-usage analytics (per-user JSONB counters, no extra table) ────────
+#
+# Frequency-of-feature metric without a new table or migration: counts live in
+# the same reserved personalization._usage namespace as chat_turns, under an
+# "events" sub-key bucketed by calendar month. Chat frequency is read from the
+# existing chat_turns counter (not double-counted here). aggregate_usage_stats
+# sums across all users for the admin /stats readout (JSON the owner can process).
+
+_EVENTS_KEY = "events"
+_USAGE_MONTHS_KEPT = 3  # rolling window so the JSONB blob stays bounded
+
+
+async def bump_usage(user_id: str, event: str) -> None:
+    """Increment personalization._usage.events[<month>][<event>] for a user.
+    Best-effort and read-merge-write: it never clobbers chat_turns or the user's
+    real personalization, and any failure is swallowed — analytics must never
+    break a user action."""
+    try:
+        settings = await load_settings(user_id)
+        personalization = dict(settings.get("personalization") or {})
+        usage = dict(personalization.get(_USAGE_KEY) or {})
+        events = dict(usage.get(_EVENTS_KEY) or {})
+        month = _current_usage_month()
+        month_events = dict(events.get(month) or {})
+        month_events[event] = int(month_events.get(event, 0) or 0) + 1
+        events[month] = month_events
+        for stale in sorted(events)[:-_USAGE_MONTHS_KEPT]:  # prune old months
+            events.pop(stale, None)
+        usage[_EVENTS_KEY] = events
+        personalization[_USAGE_KEY] = usage
+        await save_settings(user_id, {"personalization": personalization})
+    except Exception as e:  # analytics is never load-bearing
+        logger.debug("bump_usage(%s, %s) failed (non-fatal): %s", user_id, event, e)
+
+
+async def aggregate_usage_stats() -> dict:
+    """Sum feature-usage events + chat turns across ALL users, grouped by month.
+    Returns {users_total, users_active, by_month: {month: {event: n, chat: n}}}.
+    Reads only the reserved _usage namespace — no personal profile data leaves
+    the DB. Backs the admin /stats command."""
+    resp = await _get_client().table("user_settings").select("personalization").execute()
+    rows = resp.data or []
+    by_month: dict[str, dict[str, int]] = {}
+    users_active = 0
+    for r in rows:
+        usage = (r.get("personalization") or {}).get(_USAGE_KEY) or {}
+        events = usage.get(_EVENTS_KEY) or {}
+        chat = usage.get(_CHAT_TURNS_KEY) or {}
+        active = False
+        for month, evs in events.items():
+            bucket = by_month.setdefault(month, {})
+            for ev, cnt in (evs or {}).items():
+                bucket[ev] = bucket.get(ev, 0) + int(cnt or 0)
+                active = True
+        for month, cnt in chat.items():
+            bucket = by_month.setdefault(month, {})
+            bucket["chat"] = bucket.get("chat", 0) + int(cnt or 0)
+            active = active or bool(cnt)
+        if active:
+            users_active += 1
+    return {"users_total": len(rows), "users_active": users_active, "by_month": by_month}
 
 
 async def update_user_fields(tg_user_id: int, fields: dict) -> bool:
@@ -673,11 +733,21 @@ async def link_orphan_digests(user_id: str) -> int:
     return len(resp.data or [])
 
 
+def _digest_day_msk() -> str:
+    """The current digest 'day' bucket, in Europe/Moscow. The digests table 'date'
+    column is written in MSK (append_user_digest), so the daily-cap count MUST
+    bucket the same way — a UTC bucket here under-counted during 21:00–24:00 UTC
+    and let an extra digest through right after MSK midnight."""
+    import pytz
+    return datetime.now(pytz.timezone("Europe/Moscow")).strftime("%Y-%m-%d")
+
+
 async def count_user_digests_today(user_id: str) -> int:
-    """Return how many digest rows exist for this user_id with date = today (UTC).
-    Used by the cron fan-out to enforce digests_per_day without a separate counter
+    """Return how many digest rows exist for this user_id with date = today (MSK,
+    matching how append_user_digest stamps the row). Used by the cron fan-out AND
+    the manual 📰 cap to enforce digests_per_day without a separate counter
     column — the digests table is the authoritative source."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = _digest_day_msk()
     resp = await (
         _get_client().table("digests")
         .select("id", count="exact")

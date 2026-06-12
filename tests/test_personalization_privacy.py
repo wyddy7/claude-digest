@@ -188,6 +188,7 @@ def _patch_chat_db(monkeypatch, personalization_blob):
             "user_id": user_id,
             "current_focus": "",
             "interaction_history": [],
+            "model": "test/per-user-model",
             "personalization": personalization_blob,
         }
 
@@ -202,8 +203,9 @@ def test_chat_turn_tenant_system_prompt_is_owner_free(monkeypatch):
     _patch_chat_db(monkeypatch, personalization_blob={"_usage": {"chat_turns": {}}})
     captured: dict = {}
 
-    def fake_create_chat_agent(system_prompt, checkpointer, user_id):
+    def fake_create_chat_agent(system_prompt, checkpointer, user_id, model_id=None):
         captured["system_prompt"] = system_prompt
+        captured["model_id"] = model_id
         return _FakeChatAgent()
 
     monkeypatch.setattr(agent, "create_chat_agent", fake_create_chat_agent)
@@ -214,14 +216,17 @@ def test_chat_turn_tenant_system_prompt_is_owner_free(monkeypatch):
     sysp = captured["system_prompt"]
     assert OWNER_BIO not in sysp
     assert OWNER_STOP_WORD not in sysp
+    # Fix A: the tenant's chat runs on THEIR selected model, not the owner yaml's.
+    assert captured["model_id"] == "test/per-user-model"
 
 
 def test_chat_turn_owner_keeps_yaml_profile(monkeypatch):
     _patch_chat_db(monkeypatch, personalization_blob={})
     captured: dict = {}
 
-    def fake_create_chat_agent(system_prompt, checkpointer, user_id):
+    def fake_create_chat_agent(system_prompt, checkpointer, user_id, model_id=None):
         captured["system_prompt"] = system_prompt
+        captured["model_id"] = model_id
         return _FakeChatAgent()
 
     monkeypatch.setattr(agent, "create_chat_agent", fake_create_chat_agent)
