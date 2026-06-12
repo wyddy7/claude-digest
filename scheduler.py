@@ -175,11 +175,30 @@ async def run_digest_fanout():
     async with Bot(BOT_TOKEN) as bot:
         for user in users:
             tg_user_id = user["tg_user_id"]
+            user_id = user["id"]
             try:
                 if not await subscriptions.is_subscription_active(tg_user_id):
                     # Inactive: optionally warn near expiry, then skip delivery.
                     await subscriptions.maybe_warn_expiry(tg_user_id, bot)
                     continue
+
+                # N6: enforce digests_per_day on the CRON path only.
+                # Manual 📰 requests are always lenient (on-demand, user-initiated).
+                daily_cap = await db.get_effective_limit(user_id, "digests_per_day", None)
+                if daily_cap is not None:
+                    try:
+                        daily_cap = int(daily_cap)
+                    except (TypeError, ValueError):
+                        daily_cap = None
+                if daily_cap is not None and daily_cap >= 0:
+                    already_sent = await db.count_user_digests_today(user_id)
+                    if already_sent >= daily_cap:
+                        logger.info(
+                            "Fan-out: skipping %s — digests_per_day cap %d reached (%d sent today)",
+                            tg_user_id, daily_cap, already_sent,
+                        )
+                        continue
+
                 posts_count = await _deliver_user_digest(bot, user)
                 logger.info(f"Fan-out: delivered to {tg_user_id} ({posts_count} posts)")
             except Exception as e:

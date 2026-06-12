@@ -161,6 +161,18 @@ HISTORY_HEADER_TEMPLATE = "📚 <b>История</b> ({count} дайджест�
 HISTORY_NOT_FOUND = "Запись не найдена."
 HISTORY_TRUNCATED_SUFFIX = "\n\n<i>(сокращено)</i>"
 
+# ── admin surface ─────────────────────────────────────────────────────────────
+ADMIN_RESET_USER_USAGE = "Использование: /reset_user <tg_user_id> [full]"
+ADMIN_RESET_USER_NOT_FOUND = "❌ Юзер {target} не найден в БД."
+ADMIN_RESET_USER_OK = (
+    "✅ Юзер {target}: онбординг сброшен (каналы/фокус очищены). "
+    "При следующем /start заново пройдёт визард."
+)
+ADMIN_RESET_USER_FULL_OK = (
+    "✅ Юзер {target}: строки users + user_settings удалены полностью. "
+    "Повторный /start создаст новую строку (invite required)."
+)
+
 # ── check-in surface ───────────────────────────────────────────────────────────
 CHECKIN_QUESTION = "Эй, успел глянуть дайджест?"
 CHECKIN_FOCUS_SUFFIX = " Как дела с *{focus}*?"

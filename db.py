@@ -680,6 +680,66 @@ async def ensure_owner_user() -> None:
     )
 
 
+async def count_user_digests_today(user_id: str) -> int:
+    """Return how many digest rows exist for this user_id with date = today (UTC).
+    Used by the cron fan-out to enforce digests_per_day without a separate counter
+    column — the digests table is the authoritative source."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    resp = await (
+        _get_client().table("digests")
+        .select("id", count="exact")
+        .eq("user_id", user_id)
+        .eq("date", today)
+        .execute()
+    )
+    # PostgREST returns the count in resp.count when count="exact" is set.
+    # Fall back to len(resp.data) if the attribute is absent (version delta).
+    count = getattr(resp, "count", None)
+    if count is not None:
+        return int(count)
+    return len(resp.data or [])
+
+
+async def reset_user_onboarding(tg_user_id: int) -> bool:
+    """Reset users.onboarding_state to 'invited' and clear channels + current_focus
+    in user_settings so the next /start re-runs the onboarding wizard.
+
+    Does NOT touch trial_used, pro_until, or the invite flow — the user keeps
+    their subscription state. Returns True if a users row was found and updated.
+    """
+    user = await get_user_by_tg_id(tg_user_id)
+    if not user:
+        return False
+    user_id = user["id"]
+    # Reset onboarding state so the next /start enters the wizard entry point.
+    await update_user_fields(tg_user_id, {"onboarding_state": "invited"})
+    # Clear channel list and focus so onboarding re-collects them from scratch.
+    await save_settings(user_id, {
+        "channels": [],
+        "current_focus": "",
+    })
+    logger.info("reset_user_onboarding: tg_user_id=%s → invited, channels/focus cleared", tg_user_id)
+    return True
+
+
+async def delete_user_rows(tg_user_id: int) -> bool:
+    """DELETE both the users row and the paired user_settings row for tg_user_id.
+    The user_settings FK cascades on most DB schemas; we delete both explicitly for
+    safety. Returns True if a users row existed (and was deleted)."""
+    user = await get_user_by_tg_id(tg_user_id)
+    if not user:
+        return False
+    user_id = user["id"]
+    # Delete user_settings first to avoid FK violation if cascade is not set.
+    try:
+        await _get_client().table("user_settings").delete().eq("user_id", user_id).execute()
+    except Exception as e:
+        logger.warning("delete_user_rows: user_settings delete failed (non-fatal): %s", e)
+    await _get_client().table("users").delete().eq("tg_user_id", tg_user_id).execute()
+    logger.info("delete_user_rows: deleted users + user_settings for tg_user_id=%s", tg_user_id)
+    return True
+
+
 async def load_personalization_db(tenant_id: str) -> dict:
     """Return the personalization JSONB for a tenant (the user's UUID id). Falls
     back to an empty dict — the caller (build_pipeline_config consumer) then uses

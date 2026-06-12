@@ -1,10 +1,10 @@
 """
-Offline tests for admin grant/revoke surface (handlers/admin.py).
+Offline tests for admin grant/revoke/reset surface (handlers/admin.py).
 
 ADMIN_ID gate: non-admin numeric id is silently ignored (no reply, no DB write).
-Admin id: grants Pro (update_subscription stacks) or revokes (clears pro_until +
-trial_ends_at). All via fake supabase shim — no network, no real tg ids (synthetic
-111-style only).
+Admin id: grants Pro (update_subscription stacks), revokes (clears pro_until +
+trial_ends_at), or resets onboarding state. All via fake supabase shim — no
+network, no real tg ids (synthetic 111-style only).
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from handlers import admin as admin_surface
 class FakeDB:
     def __init__(self):
         self.users: dict[int, dict] = {}
+        self.user_settings: dict[str, dict] = {}  # keyed by str(user_id)
         self.tier_defaults: dict[str, dict] = {}
         self.events: dict[str, dict] = {}
 
@@ -88,6 +89,30 @@ class FakeDB:
     async def delete_subscription_event(self, telegram_payment_charge_id: str) -> None:
         self.events.pop(telegram_payment_charge_id, None)
 
+    async def save_settings(self, user_id: str, fields: dict) -> dict:
+        row = self.user_settings.setdefault(user_id, {})
+        row.update(fields)
+        return copy.deepcopy(row)
+
+    async def reset_user_onboarding(self, tg_user_id: int) -> bool:
+        user = self.users.get(tg_user_id)
+        if not user:
+            return False
+        user_id = str(tg_user_id)
+        self.users[tg_user_id]["onboarding_state"] = "invited"
+        settings = self.user_settings.setdefault(user_id, {})
+        settings["channels"] = []
+        settings["current_focus"] = ""
+        return True
+
+    async def delete_user_rows(self, tg_user_id: int) -> bool:
+        if tg_user_id not in self.users:
+            return False
+        user_id = str(tg_user_id)
+        self.users.pop(tg_user_id, None)
+        self.user_settings.pop(user_id, None)
+        return True
+
 
 @pytest.fixture()
 def fdb():
@@ -100,6 +125,7 @@ def patch_db(fdb, monkeypatch):
         "get_user_by_tg_id", "get_or_create_user", "get_tier_default",
         "get_tier_limits", "update_user_fields", "update_subscription_row",
         "grant_trial_row", "insert_subscription_event", "delete_subscription_event",
+        "save_settings", "reset_user_onboarding", "delete_user_rows",
     ):
         monkeypatch.setattr(db_module, name, getattr(fdb, name))
 
@@ -305,3 +331,117 @@ async def test_revoke_pro_admin_id_zero_blocks_all(fdb, monkeypatch):
 
     update.message.reply_text.assert_not_awaited()
     assert fdb.users[_TARGET_TG_ID]["pro_until"] == future_iso
+
+
+# ─── /reset_user ──────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_reset_user_non_admin_silently_ignored(fdb, monkeypatch):
+    """Non-admin → reset_user is silently ignored, no DB mutation."""
+    monkeypatch.setattr(admin_surface, "ADMIN_ID", _ADMIN_TG_ID)
+    _seed_user(fdb, _TARGET_TG_ID, onboarding_state="done", trial_used=True)
+
+    update = _make_update(_NON_ADMIN_TG_ID, [str(_TARGET_TG_ID)])
+    ctx = _make_context([str(_TARGET_TG_ID)])
+
+    await admin_surface.cmd_reset_user(update, ctx)
+
+    update.message.reply_text.assert_not_awaited()
+    assert fdb.users[_TARGET_TG_ID]["onboarding_state"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_reset_user_soft_resets_onboarding_state(fdb, monkeypatch):
+    """Admin /reset_user <id> sets onboarding_state='invited', clears channels+focus."""
+    monkeypatch.setattr(admin_surface, "ADMIN_ID", _ADMIN_TG_ID)
+    uid_str = str(_TARGET_TG_ID)
+    _seed_user(fdb, _TARGET_TG_ID, onboarding_state="done", trial_used=True)
+    # Pre-seed settings so we can assert they are cleared.
+    fdb.user_settings[uid_str] = {"channels": ["llm_notes"], "current_focus": "ai"}
+
+    update = _make_update(_ADMIN_TG_ID, [str(_TARGET_TG_ID)])
+    ctx = _make_context([str(_TARGET_TG_ID)])
+
+    await admin_surface.cmd_reset_user(update, ctx)
+
+    # onboarding_state must be reset to 'invited'.
+    assert fdb.users[_TARGET_TG_ID]["onboarding_state"] == "invited"
+    # Channels and focus must be cleared.
+    assert fdb.user_settings[uid_str]["channels"] == []
+    assert fdb.user_settings[uid_str]["current_focus"] == ""
+    # trial_used must NOT be touched.
+    assert fdb.users[_TARGET_TG_ID]["trial_used"] is True
+    # pro_until must NOT be touched (if set).
+    # Admin gets a confirmation reply.
+    update.message.reply_text.assert_awaited_once()
+    reply = update.message.reply_text.await_args.args[0]
+    assert str(_TARGET_TG_ID) in reply
+
+
+@pytest.mark.asyncio
+async def test_reset_user_not_found_replies_not_found(fdb, monkeypatch):
+    """Admin /reset_user on a non-existent user replies with 'not found'."""
+    monkeypatch.setattr(admin_surface, "ADMIN_ID", _ADMIN_TG_ID)
+    # Do NOT seed _TARGET_TG_ID — it doesn't exist.
+
+    update = _make_update(_ADMIN_TG_ID, [str(_TARGET_TG_ID)])
+    ctx = _make_context([str(_TARGET_TG_ID)])
+
+    await admin_surface.cmd_reset_user(update, ctx)
+
+    update.message.reply_text.assert_awaited_once()
+    reply = update.message.reply_text.await_args.args[0]
+    assert str(_TARGET_TG_ID) in reply
+    assert "❌" in reply or "не найден" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_reset_user_full_deletes_rows(fdb, monkeypatch):
+    """Admin /reset_user <id> full deletes both users and user_settings rows."""
+    monkeypatch.setattr(admin_surface, "ADMIN_ID", _ADMIN_TG_ID)
+    uid_str = str(_TARGET_TG_ID)
+    _seed_user(fdb, _TARGET_TG_ID, onboarding_state="done", trial_used=True)
+    fdb.user_settings[uid_str] = {"channels": ["llm_notes"]}
+
+    update = _make_update(_ADMIN_TG_ID, [str(_TARGET_TG_ID), "full"])
+    ctx = _make_context([str(_TARGET_TG_ID), "full"])
+
+    await admin_surface.cmd_reset_user(update, ctx)
+
+    # Both rows must be gone.
+    assert _TARGET_TG_ID not in fdb.users
+    assert uid_str not in fdb.user_settings
+    # Admin gets a confirmation reply.
+    update.message.reply_text.assert_awaited_once()
+    reply = update.message.reply_text.await_args.args[0]
+    assert str(_TARGET_TG_ID) in reply
+
+
+@pytest.mark.asyncio
+async def test_reset_user_full_not_found_replies_not_found(fdb, monkeypatch):
+    """Admin /reset_user <id> full on non-existent user → not-found reply."""
+    monkeypatch.setattr(admin_surface, "ADMIN_ID", _ADMIN_TG_ID)
+
+    update = _make_update(_ADMIN_TG_ID, [str(_TARGET_TG_ID), "full"])
+    ctx = _make_context([str(_TARGET_TG_ID), "full"])
+
+    await admin_surface.cmd_reset_user(update, ctx)
+
+    update.message.reply_text.assert_awaited_once()
+    reply = update.message.reply_text.await_args.args[0]
+    assert "❌" in reply or "не найден" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_reset_user_missing_arg_replies_usage(fdb, monkeypatch):
+    """Admin /reset_user with no args replies with usage hint."""
+    monkeypatch.setattr(admin_surface, "ADMIN_ID", _ADMIN_TG_ID)
+
+    update = _make_update(_ADMIN_TG_ID, [])
+    ctx = _make_context([])
+
+    await admin_surface.cmd_reset_user(update, ctx)
+
+    update.message.reply_text.assert_awaited_once()
+    reply = update.message.reply_text.await_args.args[0]
+    assert "reset_user" in reply.lower() or "использование" in reply.lower()

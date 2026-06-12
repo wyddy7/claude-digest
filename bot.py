@@ -157,11 +157,28 @@ def channels_kb(channels: list) -> InlineKeyboardMarkup:
 
 
 async def cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Read-only view of the per-stage model registry (which model runs each
-    pipeline stage, and why). Metadata is sourced from the registry — the same
-    source the pipeline uses — so the UI never drifts from runtime behavior."""
-    data = await db.load()
-    registry = build_registry_from_state(data, load_personalization())
+    """Read-only view of the per-stage model registry for the calling user.
+
+    Owner: reads from the legacy user_state (id=1) for backward compat.
+    Non-owner: reads from their own user_settings row via the multi-tenant path.
+    Both paths share the same registry builder so the output is never stale."""
+    if context.user_data.get("is_owner"):
+        data = await db.load()
+        registry = build_registry_from_state(data, load_personalization())
+    else:
+        user = context.user_data.get("user")
+        if not user:
+            await update.message.reply_text("Не удалось определить пользователя.")
+            return
+        user_id = user["id"]
+        settings = await db.load_settings(user_id)
+        cfg_data = {
+            "channels": settings.get("channels") or [],
+            "current_focus": settings.get("current_focus") or "",
+            "model": settings.get("model") or db.DEFAULT_MODEL,
+        }
+        cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
+        registry = build_registry_from_state(cfg_data, cfg_yaml)
     text = "🧩 <b>Модели по этапам пайплайна</b>\n\n" + escape(describe_registry(registry))
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -635,6 +652,7 @@ def main():
     app.add_handler(CommandHandler("give_pro", admin_surface.cmd_give_pro))
     app.add_handler(CommandHandler("revoke_pro", admin_surface.cmd_revoke_pro))
     app.add_handler(CommandHandler("grant_trial", admin_surface.cmd_grant_trial))
+    app.add_handler(CommandHandler("reset_user", admin_surface.cmd_reset_user))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
