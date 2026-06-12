@@ -905,6 +905,29 @@ try:
     record_usage(log, "triage", "m", _RWithout())
     record_usage(None, "triage", "m", _RWith())  # None log → no-op, no raise
     check("p6_record_usage_appends", len(log) == 1 and log[0]["prompt_tokens"] == 7)
+
+    # OpenRouter authoritative cost: usage.cost captured straight off the response
+    import pricing
+    class _UCost:
+        prompt_tokens = 10; completion_tokens = 5; cost = 0.0042
+    class _RCost: usage = _UCost()
+    clog = []
+    record_usage(clog, "digest", "anthropic/claude-3.5-haiku", _RCost())
+    check("p6_api_cost_captured", clog[0]["cost_usd"] == 0.0042)
+
+    # _build_cost_summary sums the API cost per stage; price_cost_summary PREFERS it
+    cs_cost = _build_cost_summary(_Cfg("extract"), clog, None)
+    check("p6_stage_api_cost_summed", cs_cost["per_stage_tokens"]["digest"]["api_cost_usd"] == 0.0042)
+    priced = pricing.price_cost_summary(cs_cost)
+    check("p6_priced_prefers_api", abs(priced["total_cost_usd"] - 0.0042) < 1e-9)
+    check("p6_priced_by_model", "anthropic/claude-3.5-haiku" in priced["by_model"])
+
+    # Fallback table only when the response omitted cost (no silent $0)
+    fb_log = [{"stage": "digest", "model": "deepseek/deepseek-chat",
+               "prompt_tokens": 1_000_000, "completion_tokens": 0, "cost_usd": None}]
+    cs_fb = _build_cost_summary(_Cfg("off"), fb_log, None)
+    priced_fb = pricing.price_cost_summary(cs_fb)
+    check("p6_fallback_priced_nonzero", priced_fb["total_cost_usd"] > 0)
 except Exception as e:
     FAIL.append("cost_instrumentation")
     print(f"  FAIL  cost_instrumentation: {e}")

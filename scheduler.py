@@ -35,7 +35,7 @@ async def _deliver_user_digest(bot, user: dict) -> int:
     no duplicated config-build/send/save logic."""
     from handlers.digest import deliver_digest
 
-    return await deliver_digest(bot, user)
+    return await deliver_digest(bot, user, source="cron")
 
 
 async def run_digest_fanout():

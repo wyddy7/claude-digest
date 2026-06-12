@@ -54,9 +54,11 @@ async def _build_user_config(user: dict) -> tuple:
     return build_pipeline_config(cfg_data, cfg_yaml, recent_digests=recent), settings
 
 
-async def deliver_digest(bot, user: dict, *, on_status=None) -> int:
+async def deliver_digest(bot, user: dict, *, on_status=None, source: str = "manual") -> int:
     """Generate + deliver one tenant's digest. Returns posts_count. The chat id is
-    the numeric tg_user_id. Shared by the 📰 button and the onboarding preview."""
+    the numeric tg_user_id. Shared by the 📰 button and the onboarding preview.
+    `source` ('manual' | 'cron' | 'onboarding') is recorded on the cost event so
+    the dashboard can split spend by trigger."""
     from datetime import datetime as dt
 
     import pytz
@@ -90,6 +92,14 @@ async def deliver_digest(bot, user: dict, *, on_status=None) -> int:
     except Exception as exc:
         # History write is best-effort — never abort delivery on a ledger failure.
         logger.warning("append_user_digest failed (non-fatal): %s", exc)
+
+    # Persist the LLM cost of this generation (authoritative USD from OpenRouter,
+    # carried in result["cost_summary"]). Best-effort telemetry — never load-bearing.
+    is_error = digest_html.startswith("Ошибка") or digest_html.startswith("Не нашёл")
+    await db.record_digest_cost(
+        user_id, result.get("cost_summary"),
+        posts_count=posts_count, is_error=is_error, source=source,
+    )
 
     saved = {
         "last_digest": digest_html,
@@ -125,6 +135,7 @@ async def send_digest(update, context):
         if cap is not None and cap >= 0:
             sent_today = await db.count_user_digests_today(user["id"])
             if sent_today >= cap:
+                await db.log_event(user["id"], "quota_hit", {"kind": "digests_per_day", "cap": cap})
                 await update.effective_message.reply_text(DIGEST_DAILY_CAP)
                 return
 

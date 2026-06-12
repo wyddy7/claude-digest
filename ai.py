@@ -84,10 +84,27 @@ def _get_client(api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE)
 
 
+def _usage_cost(usage) -> float | None:
+    """Pull OpenRouter's authoritative per-call USD cost off a usage object.
+    OpenRouter ALWAYS returns usage.cost (no request flag needed); the OpenAI SDK
+    surfaces it as an attribute or, for unknown fields, under model_extra. Returns
+    None when absent (fakes / a provider that omits it) so the caller can fall
+    back to the local price table instead of recording a silent $0."""
+    cost = getattr(usage, "cost", None)
+    if cost is None:
+        extra = getattr(usage, "model_extra", None) or {}
+        cost = extra.get("cost")
+    try:
+        return float(cost) if cost is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def record_usage(usage_log, stage: str, model: str, resp) -> None:
-    """Append one LLM call's token usage to usage_log (no-op if log is None or
-    the response carries no usage). OpenRouter populates resp.usage; fakes may
-    not. Never raises — instrumentation must not break the pipeline."""
+    """Append one LLM call's token usage + authoritative USD cost to usage_log
+    (no-op if log is None or the response carries no usage). OpenRouter populates
+    resp.usage including usage.cost; fakes may not. Never raises — instrumentation
+    must not break the pipeline."""
     if usage_log is None:
         return
     usage = getattr(resp, "usage", None)
@@ -99,6 +116,9 @@ def record_usage(usage_log, stage: str, model: str, resp) -> None:
             "model": model,
             "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
             "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            # OpenRouter's real charge for this call (USD); None if the provider
+            # didn't return it → priced from the fallback table downstream.
+            "cost_usd": _usage_cost(usage),
         })
     except Exception:
         pass

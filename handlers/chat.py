@@ -310,6 +310,7 @@ async def _chat_with_digest(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         cap = _CHAT_TURNS_FALLBACK
     used = await db.count_chat_turns_this_month(user_id)
     if cap >= 0 and used >= cap:
+        await db.log_event(user_id, "quota_hit", {"kind": "chat_turns_per_month", "cap": cap})
         await update.message.reply_text(CHAT_LIMIT_HIT.format(cap=cap))
         return
 
@@ -329,6 +330,9 @@ async def _chat_with_digest(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await db.record_chat_turn(user_id)
         except Exception as exc:
             logger.warning("record_chat_turn failed (non-fatal): %s", exc)
+        # Telemetry event (separate from the load-bearing quota counter above) —
+        # gives the dashboard chat DAU/engagement with timestamps. Best-effort.
+        await db.log_event(user_id, "chat")
     except Exception as exc:
         logger.warning("chat agent turn failed for %s: %s", tg_user_id, exc)
         try:

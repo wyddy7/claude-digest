@@ -357,67 +357,240 @@ async def record_chat_turn(user_id: str) -> int:
     return new_count
 
 
-# ─── feature-usage analytics (per-user JSONB counters, no extra table) ────────
+# ─── product telemetry + LLM cost: append-only usage_events table ─────────────
 #
-# Frequency-of-feature metric without a new table or migration: counts live in
-# the same reserved personalization._usage namespace as chat_turns, under an
-# "events" sub-key bucketed by calendar month. Chat frequency is read from the
-# existing chat_turns counter (not double-counted here). aggregate_usage_stats
-# sums across all users for the admin /stats readout (JSON the owner can process).
+# Replaces the old JSONB per-month counters. Append-only rows WITH timestamps, so
+# funnels / retention / DAU come for free; analytics no longer does read-merge-
+# write on the same blob as the load-bearing chat_turns quota counter (which still
+# lives in user_settings, untouched); and LLM cost is persisted (cost_usd) so unit
+# economics are computable. See migrations/006_usage_events.sql.
+#
+# Every write is BEST-EFFORT: a telemetry failure — including the table not
+# existing yet (safe deploy-before-migrate) — is swallowed. Instrumentation must
+# never break a user action.
+#
+# Event vocabulary (event column):
+#   digest_generated  — one pipeline run; carries cost_usd + per-model breakdown
+#   digest_manual     — 📰 button press (counter; cost lives on digest_generated)
+#   chat              — one chat turn (DAU/engagement; quota count stays in JSONB)
+#   onboarding_done   — funnel activation step
+#   payment           — Stars grant applied (revenue authority = subscription_events)
+#   quota_hit         — a user hit chat_turns or digests_per_day cap (upsell signal)
 
-_EVENTS_KEY = "events"
-_USAGE_MONTHS_KEPT = 3  # rolling window so the JSONB blob stays bounded
+
+async def log_event(
+    user_id: Optional[str], event: str, payload: Optional[dict] = None,
+    cost_usd: Optional[float] = None,
+) -> None:
+    """Append one telemetry row. Best-effort: swallows every failure (incl. a
+    missing table) so a user action never breaks on analytics."""
+    try:
+        row: dict = {"event": event, "payload": payload or {}}
+        if user_id:
+            row["user_id"] = user_id
+        if cost_usd is not None:
+            row["cost_usd"] = round(float(cost_usd), 6)
+        await _get_client().table("usage_events").insert(row).execute()
+    except Exception as e:
+        logger.debug("log_event(%s) failed (non-fatal): %s", event, e)
 
 
 async def bump_usage(user_id: str, event: str) -> None:
-    """Increment personalization._usage.events[<month>][<event>] for a user.
-    Best-effort and read-merge-write: it never clobbers chat_turns or the user's
-    real personalization, and any failure is swallowed — analytics must never
-    break a user action."""
+    """Back-compat shim — a counter-style event with no payload/cost. Existing
+    call sites (digest_manual, onboarding_done, payment) keep working unchanged;
+    new rich events use log_event / record_digest_cost directly."""
+    await log_event(user_id, event)
+
+
+async def record_digest_cost(
+    user_id: Optional[str], cost_summary: Optional[dict], *,
+    posts_count: int, is_error: bool, source: str,
+) -> None:
+    """Persist one digest generation's LLM cost as a 'digest_generated' event.
+    Prices the pipeline cost_summary via pricing.price_cost_summary; cost_usd is
+    the denormalized total (cheap column SUM for the dashboard), payload keeps the
+    full per-stage / per-model breakdown + read_mode + is_error + source."""
     try:
-        settings = await load_settings(user_id)
-        personalization = dict(settings.get("personalization") or {})
-        usage = dict(personalization.get(_USAGE_KEY) or {})
-        events = dict(usage.get(_EVENTS_KEY) or {})
-        month = _current_usage_month()
-        month_events = dict(events.get(month) or {})
-        month_events[event] = int(month_events.get(event, 0) or 0) + 1
-        events[month] = month_events
-        for stale in sorted(events)[:-_USAGE_MONTHS_KEPT]:  # prune old months
-            events.pop(stale, None)
-        usage[_EVENTS_KEY] = events
-        personalization[_USAGE_KEY] = usage
-        await save_settings(user_id, {"personalization": personalization})
-    except Exception as e:  # analytics is never load-bearing
-        logger.debug("bump_usage(%s, %s) failed (non-fatal): %s", user_id, event, e)
+        import pricing
+        priced = pricing.price_cost_summary(cost_summary or {})
+        total = priced.get("total_cost_usd", 0.0)
+        payload = {
+            "source": source,
+            "posts_count": int(posts_count or 0),
+            "is_error": bool(is_error),
+            "read_mode": priced.get("read_mode", ""),
+            "total_cost_usd": total,
+            "by_model": priced.get("by_model", {}),
+            "by_stage": priced.get("by_stage", {}),
+        }
+        await log_event(user_id, "digest_generated", payload, cost_usd=total)
+    except Exception as e:
+        logger.debug("record_digest_cost failed (non-fatal): %s", e)
 
 
-async def aggregate_usage_stats() -> dict:
-    """Sum feature-usage events + chat turns across ALL users, grouped by month.
-    Returns {users_total, users_active, by_month: {month: {event: n, chat: n}}}.
-    Reads only the reserved _usage namespace — no personal profile data leaves
-    the DB. Backs the admin /stats command."""
-    resp = await _get_client().table("user_settings").select("personalization").execute()
-    rows = resp.data or []
-    by_month: dict[str, dict[str, int]] = {}
-    users_active = 0
-    for r in rows:
-        usage = (r.get("personalization") or {}).get(_USAGE_KEY) or {}
-        events = usage.get(_EVENTS_KEY) or {}
-        chat = usage.get(_CHAT_TURNS_KEY) or {}
-        active = False
-        for month, evs in events.items():
-            bucket = by_month.setdefault(month, {})
-            for ev, cnt in (evs or {}).items():
-                bucket[ev] = bucket.get(ev, 0) + int(cnt or 0)
-                active = True
-        for month, cnt in chat.items():
-            bucket = by_month.setdefault(month, {})
-            bucket["chat"] = bucket.get("chat", 0) + int(cnt or 0)
-            active = active or bool(cnt)
-        if active:
-            users_active += 1
-    return {"users_total": len(rows), "users_active": users_active, "by_month": by_month}
+# ─── /stats dashboard aggregation (Python-side; scales to ~thousands of rows) ──
+#
+# Pulls a time window of usage_events + subscription_events + the users snapshot
+# and computes the 4-tier dashboard in Python. At current scale this is a few
+# hundred rows — a full fetch + Python sum is simpler and more robust than
+# PostgREST aggregate RPCs. If usage_events ever grows past ~10k/window, move the
+# SUMs server-side (a Postgres view or RPC) — the call sites won't change.
+
+def _parse_ts(value) -> Optional[datetime]:
+    """Parse a PostgREST ISO timestamp to an aware datetime (UTC). None on junk."""
+    if not value:
+        return None
+    try:
+        s = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+async def _fetch_window(table: str, cols: str, cutoff_iso: str) -> list[dict]:
+    try:
+        resp = (
+            await _get_client().table(table).select(cols)
+            .gte("created_at", cutoff_iso).execute()
+        )
+        return resp.data or []
+    except Exception as e:
+        logger.debug("_fetch_window(%s) failed (non-fatal): %s", table, e)
+        return []
+
+
+async def _fetch_all_users() -> list[dict]:
+    try:
+        resp = await _get_client().table("users").select(
+            "id,tg_user_id,tier,created_at,pro_until,trial_ends_at,trial_used,onboarding_state"
+        ).execute()
+        return resp.data or []
+    except Exception as e:
+        logger.debug("_fetch_all_users failed (non-fatal): %s", e)
+        return []
+
+
+def build_dashboard(events: list[dict], subs: list[dict], users: list[dict],
+                    *, now: datetime, days: int) -> dict:
+    """Pure aggregation (no IO) over already-fetched rows → 4-tier dashboard.
+    Split out from aggregate_stats so it is unit-testable offline."""
+    import pricing
+    econ_cutoff = now - timedelta(days=days)
+
+    def in_econ(row) -> bool:
+        ts = _parse_ts(row.get("created_at"))
+        return ts is not None and ts >= econ_cutoff
+
+    # ── Tier 1: unit economics ────────────────────────────────────────────────
+    digest_evs = [e for e in events if e.get("event") == "digest_generated" and in_econ(e)]
+    n_digests = len(digest_evs)
+    total_cost = sum(float(e.get("cost_usd") or 0.0) for e in digest_evs)
+    cost_by_user: dict = {}
+    cost_by_model: dict = {}
+    for e in digest_evs:
+        uid = e.get("user_id")
+        cost_by_user[uid] = cost_by_user.get(uid, 0.0) + float(e.get("cost_usd") or 0.0)
+        for m, c in ((e.get("payload") or {}).get("by_model") or {}).items():
+            cost_by_model[m] = cost_by_model.get(m, 0.0) + float(c or 0.0)
+    paying_user_ids = {s.get("user_id") for s in subs
+                       if in_econ(s) and s.get("stars_amount") and s.get("user_id")}
+    revenue_stars = sum(int(s.get("stars_amount") or 0) for s in subs
+                        if in_econ(s) and s.get("stars_amount"))
+    revenue_usd = revenue_stars * pricing.STAR_USD
+    n_users_with_cost = len([u for u in cost_by_user if u])
+
+    economics = {
+        "digests": n_digests,
+        "total_cost_usd": round(total_cost, 4),
+        "cost_per_digest_usd": round(total_cost / n_digests, 5) if n_digests else 0.0,
+        "cost_per_user_usd": round(total_cost / n_users_with_cost, 4) if n_users_with_cost else 0.0,
+        "revenue_stars": revenue_stars,
+        "revenue_usd": round(revenue_usd, 2),
+        "gross_margin_usd": round(revenue_usd - total_cost, 2),
+        "paying_users": len(paying_user_ids),
+        "cost_by_model": {m: round(c, 4) for m, c in
+                          sorted(cost_by_model.items(), key=lambda kv: -kv[1])},
+    }
+
+    # ── Tier 2: funnel / activation ───────────────────────────────────────────
+    def active_since(d: int) -> int:
+        cut = now - timedelta(days=d)
+        return len({e.get("user_id") for e in events if e.get("user_id")
+                    and (_parse_ts(e.get("created_at")) or now) >= cut})
+
+    signups = len([u for u in users if (_parse_ts(u.get("created_at")) or now) >= econ_cutoff])
+    onboarded = len({e.get("user_id") for e in events
+                     if e.get("event") == "onboarding_done" and in_econ(e) and e.get("user_id")})
+    first_digest_users = len({e.get("user_id") for e in digest_evs if e.get("user_id")})
+    tier_counts: dict = {}
+    active_pro = 0
+    for u in users:
+        tier_counts[u.get("tier") or "?"] = tier_counts.get(u.get("tier") or "?", 0) + 1
+        pu = _parse_ts(u.get("pro_until"))
+        if pu and pu > now:
+            active_pro += 1
+
+    activation = {
+        "users_total": len(users),
+        "signups_in_window": signups,
+        "onboarded_in_window": onboarded,
+        "first_digest_users": first_digest_users,
+        "dau": active_since(1),
+        "wau": active_since(7),
+        "mau": active_since(30),
+        "tier_counts": tier_counts,
+        "active_pro": active_pro,
+        "signup_to_paid_pct": round(100.0 * len(paying_user_ids) / signups, 1) if signups else 0.0,
+    }
+
+    # ── Tier 3: engagement / quality ──────────────────────────────────────────
+    errors = sum(1 for e in digest_evs if (e.get("payload") or {}).get("is_error"))
+    quota_hits = [e for e in events if e.get("event") == "quota_hit" and in_econ(e)]
+    chat_evs = [e for e in events if e.get("event") == "chat" and in_econ(e)]
+    engagement = {
+        "digest_error_rate_pct": round(100.0 * errors / n_digests, 1) if n_digests else 0.0,
+        "digest_errors": errors,
+        "quota_hits": len(quota_hits),
+        "quota_hit_users": len({e.get("user_id") for e in quota_hits if e.get("user_id")}),
+        "chat_turns": len(chat_evs),
+        "chat_users": len({e.get("user_id") for e in chat_evs if e.get("user_id")}),
+    }
+
+    # ── Tier 4: product (read_mode cost delta) ────────────────────────────────
+    rm_cost: dict = {}
+    rm_count: dict = {}
+    for e in digest_evs:
+        rm = (e.get("payload") or {}).get("read_mode") or "off"
+        rm_cost[rm] = rm_cost.get(rm, 0.0) + float(e.get("cost_usd") or 0.0)
+        rm_count[rm] = rm_count.get(rm, 0) + 1
+    read_mode_cost = {
+        rm: {"digests": rm_count[rm], "avg_cost_usd": round(rm_cost[rm] / rm_count[rm], 5)}
+        for rm in rm_cost
+    }
+    product = {"read_mode_cost": read_mode_cost}
+
+    return {
+        "window_days": days,
+        "economics": economics,
+        "activation": activation,
+        "engagement": engagement,
+        "product": product,
+    }
+
+
+async def aggregate_stats(days: int = 30) -> dict:
+    """Fetch a window of usage_events + subscription_events + users and build the
+    4-tier admin dashboard. Activity (DAU/WAU/MAU) always covers the fixed 1/7/30
+    day windows; everything else uses `days`. Fetches max(days, 30) so the activity
+    windows are always covered. Best-effort: missing tables → empty rows → zeros."""
+    now = datetime.now(timezone.utc)
+    fetch_days = max(int(days or 30), 30)
+    cutoff = (now - timedelta(days=fetch_days)).isoformat()
+    events = await _fetch_window("usage_events", "user_id,event,payload,cost_usd,created_at", cutoff)
+    subs = await _fetch_window("subscription_events", "user_id,event_type,stars_amount,created_at", cutoff)
+    users = await _fetch_all_users()
+    return build_dashboard(events, subs, users, now=now, days=int(days or 30))
 
 
 async def update_user_fields(tg_user_id: int, fields: dict) -> bool:
