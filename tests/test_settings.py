@@ -158,6 +158,45 @@ async def test_handle_text_not_consumed_when_no_substate():
     assert consumed is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("button", ["⚙️ Настройки", "📰 Дайджест", "👤 Профиль", "🎯 фокус"])
+async def test_handle_text_button_in_focus_substate_escapes_not_swallowed(monkeypatch, button):
+    """Regression: a reply-keyboard press while editing focus must NOT be saved as
+    the focus value — it escapes the sub-state so the router handles the press."""
+    saved: list = []
+    monkeypatch.setattr(
+        db_module, "save_settings",
+        AsyncMock(side_effect=lambda uid, fields: saved.append(fields) or {})
+    )
+    upd = make_update(text=button)
+    ctx = FakeContext()
+    ctx.user_data["settings_substate"] = "editing_focus"
+
+    consumed = await settings_mod.handle_text(upd, ctx)
+    assert consumed is False                       # not swallowed → router dispatches it
+    assert "settings_substate" not in ctx.user_data  # sub-state dropped
+    assert saved == []                              # nothing written to focus
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cmd", ["/cancel", "/menu", "/help"])
+async def test_handle_text_command_in_channel_substate_escapes(monkeypatch, cmd):
+    """A /command while adding a channel must escape, not become a channel name."""
+    saved: list = []
+    monkeypatch.setattr(
+        db_module, "save_settings",
+        AsyncMock(side_effect=lambda uid, fields: saved.append(fields) or {})
+    )
+    upd = make_update(text=cmd)
+    ctx = FakeContext()
+    ctx.user_data["settings_substate"] = "adding_channel"
+
+    consumed = await settings_mod.handle_text(upd, ctx)
+    assert consumed is False
+    assert "settings_substate" not in ctx.user_data
+    assert saved == []
+
+
 # ── handle_text: adding_channel — happy path ─────────────────────────────────
 
 

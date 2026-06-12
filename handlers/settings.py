@@ -22,6 +22,11 @@ from telegram.ext import ContextTypes
 import db
 from handlers.menu import main_kb_saas
 from handlers.strings import (
+    BTN_DIGEST,
+    BTN_HISTORY,
+    BTN_PROFILE,
+    BTN_SETTINGS,
+    BTN_SUBSCRIPTION,
     SETTINGS_ADDCH_PROMPT,
     SETTINGS_ADDCH_ALREADY,
     SETTINGS_ADDCH_INVALID,
@@ -40,6 +45,15 @@ logger = logging.getLogger(__name__)
 
 # Reuse the same permissive username regex as onboarding (C3).
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
+
+# A press of any of these reply-keyboard buttons (or the 🎯 focus button, matched
+# by prefix) is NEVER focus/channel input — it must escape the sub-state, not be
+# swallowed as a literal value. Guarded in handle_text below.
+_MENU_LABELS = {BTN_DIGEST, BTN_HISTORY, BTN_PROFILE, BTN_SETTINGS, BTN_SUBSCRIPTION}
+
+
+def _is_menu_or_command(text: str) -> bool:
+    return text.startswith("/") or text.startswith("🎯") or text in _MENU_LABELS
 
 # Available model choices offered to every user.
 AVAILABLE_MODELS: dict[str, str] = {
@@ -118,6 +132,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     """Consume settings free-text sub-states. Returns True if the message was
     consumed so chat.route_text does not also handle it."""
     substate = context.user_data.get("settings_substate")
+    if substate not in ("editing_focus", "adding_channel"):
+        return False
+
+    text = (update.message.text or "").strip()
+    # Guard: a menu-button press or a /command is not a focus/channel value.
+    # Drop the sub-state and let chat.route_text dispatch the press normally —
+    # never write the button label into the focus/channel field.
+    if _is_menu_or_command(text):
+        context.user_data.pop("settings_substate", None)
+        return False
+
     if substate == "editing_focus":
         await _ingest_focus(update, context)
         return True
