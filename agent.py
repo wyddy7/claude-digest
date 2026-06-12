@@ -357,10 +357,17 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
             except Exception:
                 pass
 
-    # Step 1 — load channels
+    # Step 1 — load channels. Multi-tenant: the caller's own channels + profile
+    # ride on the config (set by build_pipeline_config from the user's settings).
+    # Legacy/test callers leave those empty and fall back to the global db row.
     await _status(_DIGEST_STATUS["channels"])
-    data = await db_module.load()
-    channels = data.get("channels", [])
+    multitenant = bool(config.user_data) or bool(config.channels)
+    if multitenant:
+        data = dict(config.user_data)
+        channels = list(config.channels)
+    else:
+        data = await db_module.load()
+        channels = data.get("channels", [])
     logger.info(f"[digest] channels ({len(channels)}): {channels}")
 
     # Step 2 — scrape in parallel
@@ -397,7 +404,7 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     # Step 4 — generate digest
     await _status(_DIGEST_STATUS["generate"])
     user_data = data.copy()
-    recent = await db_module.load_history(limit=3)
+    recent = config.recent_digests if multitenant else await db_module.load_history(limit=3)
     digest_model = config.models["digest"].model_id
     logger.info(f"[digest] generating | posts={len(filtered)} | model={digest_model}")
     digest_html, personal_html, stats_html = await generate_digest(
@@ -406,9 +413,12 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     )
     logger.info(f"[digest] generated  | digest_len={len(digest_html)} | personal={'yes' if personal_html else 'no'}")
 
-    # Step 5 — save to history
+    # Step 5 — save to history. Legacy single-tenant writes the global history
+    # row here; multi-tenant callers record per-user history themselves
+    # (db.append_user_digest in handlers/digest.deliver_digest), so skip it.
     await _status(_DIGEST_STATUS["save"])
-    await db_module.append_to_history(digest_html, len(filtered))
+    if not multitenant:
+        await db_module.append_to_history(digest_html, len(filtered))
 
     cost_summary = _build_cost_summary(config, usage_log, reader_stats)
     logger.info(f"[digest] cost_summary: {cost_summary}")

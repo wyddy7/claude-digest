@@ -40,7 +40,9 @@ async def _build_user_config(user_id: str) -> tuple:
         "interaction_history": settings.get("interaction_history") or [],
     }
     cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
-    return build_pipeline_config(cfg_data, cfg_yaml), settings
+    # Per-user recent digests for de-dup context (scoped to THIS user, not global).
+    recent = await db.load_user_history(user_id, limit=3)
+    return build_pipeline_config(cfg_data, cfg_yaml, recent_digests=recent), settings
 
 
 async def deliver_digest(bot, user: dict, *, on_status=None) -> int:

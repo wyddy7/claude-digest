@@ -9,7 +9,6 @@ import logging
 import os
 import signal
 
-import httpx
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
@@ -17,11 +16,7 @@ from telegram import Bot
 
 import db
 import subscriptions
-from agent import run_digest_pipeline
 from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
-from delivery import send_digest_chunks
-from personalization import load_personalization
-from pipeline_config import build_pipeline_config, make_openrouter_client
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -33,45 +28,13 @@ MOSCOW = pytz.timezone("Europe/Moscow")
 
 
 async def _deliver_user_digest(bot, user: dict) -> int:
-    """Generate + deliver one user's digest using their own channels/settings/
-    personalization. Returns posts_count. Per-user chat_id = the numeric
-    tg_user_id (the value Telegram routes on)."""
-    from datetime import datetime as dt
+    """Generate + deliver one user's digest. Delegates to the single shared
+    generator (handlers.digest.deliver_digest) so the cron fan-out, the 📰
+    button, and the onboarding preview all run the exact same per-user path —
+    no duplicated config-build/send/save logic."""
+    from handlers.digest import deliver_digest
 
-    user_id = user["id"]
-    tg_user_id = user["tg_user_id"]
-    settings = await db.load_settings(user_id)
-
-    cfg_data = {
-        "channels": settings.get("channels") or [],
-        "current_focus": settings.get("current_focus") or "",
-        "focus_auto_reset": bool(settings.get("focus_auto_reset")),
-        "model": settings.get("model") or db.DEFAULT_MODEL,
-        "last_digest": settings.get("last_digest") or "",
-        "last_digest_time": settings.get("last_digest_time") or "",
-        "interaction_history": settings.get("interaction_history") or [],
-    }
-    # Personalization: DB per-tenant home, falling back to the legacy yaml template.
-    cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
-    config = build_pipeline_config(cfg_data, cfg_yaml)
-    llm_client = make_openrouter_client(OPENROUTER_KEY)
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
-        result = await run_digest_pipeline(config, llm_client=llm_client, fetcher=fetcher)
-
-    digest_html = result["digest_html"]
-    posts_count = result.get("posts_count", 0)
-    date_str = dt.now(MOSCOW).strftime("%d.%m.%Y")
-    full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
-    await send_digest_chunks(
-        bot, tg_user_id, full_text,
-        result.get("personal_html", ""), result.get("stats_html", ""),
-    )
-
-    await db.save_settings(user_id, {
-        "last_digest": digest_html,
-        "last_digest_time": dt.now().isoformat(),
-    })
-    return posts_count
+    return await deliver_digest(bot, user)
 
 
 async def run_digest_fanout():
