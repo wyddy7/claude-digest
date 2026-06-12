@@ -120,7 +120,7 @@ async def _cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def _cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
     """Tenant-safe /stages: reads the caller's own settings row, not global state."""
     from pipeline_config import build_registry_from_state, describe_registry
-    from personalization import load_personalization
+    from personalization import resolve_personalization
 
     user_id = user["id"]
     settings = await db.load_settings(user_id)
@@ -129,7 +129,11 @@ async def _cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE, user: 
         "current_focus": settings.get("current_focus") or "",
         "model": settings.get("model") or db.DEFAULT_MODEL,
     }
-    cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
+    # Privacy boundary: owner → private yaml; tenants → neutral default +
+    # their own overrides (never the owner's yaml).
+    cfg_yaml = resolve_personalization(
+        settings.get("personalization"), user.get("tg_user_id")
+    )
     registry = build_registry_from_state(cfg_data, cfg_yaml)
     text = "🧩 <b>Модели по этапам пайплайна</b>\n\n" + escape(describe_registry(registry))
     await update.message.reply_text(text, parse_mode="HTML")

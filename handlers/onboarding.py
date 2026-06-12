@@ -83,6 +83,15 @@ FOCUS_CHIPS = {
     "prod": "AI для продакшна / инфра",
 }
 
+# TODO(personalization, optional step 3): a skippable «пара слов о себе» step
+# that seeds user_settings.personalization["profile"]["description"]. Writer
+# contract: read settings → overlay {"profile": {"description": ...}} into the
+# existing personalization blob → save (NEVER replace the whole JSONB — the
+# reserved "_usage" chat-turn counter lives there, see db.record_chat_turn).
+# Not load-bearing for the privacy fix: a tenant without a profile gets the
+# neutral config/personalization.default.yaml via
+# personalization.resolve_personalization(). Copy goes to handlers/strings.py.
+
 
 # ── candidate-set helpers (within-step working set in user_data) ──────────────
 

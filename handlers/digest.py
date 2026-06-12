@@ -18,7 +18,7 @@ import db
 from agent import run_digest_pipeline
 from handlers.middleware import requires_tier
 from handlers.strings import DIGEST_COLLECTING, DIGEST_ERROR
-from personalization import load_personalization
+from personalization import resolve_personalization
 from pipeline_config import build_pipeline_config, make_openrouter_client
 
 logger = logging.getLogger(__name__)
@@ -26,9 +26,16 @@ logger = logging.getLogger(__name__)
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 
 
-async def _build_user_config(user_id: str) -> tuple:
-    """Build (PipelineConfig, settings) for a tenant from their saved settings +
-    per-tenant personalization (falling back to the legacy yaml template)."""
+async def _build_user_config(user: dict) -> tuple:
+    """Build (PipelineConfig, settings) for one user from their saved settings +
+    resolved personalization.
+
+    Privacy boundary: resolve_personalization gives the owner (env CHAT_ID)
+    their private yaml, and every other tenant the neutral committed default
+    merged with their own DB overrides — NEVER the owner's yaml. The previous
+    `load_personalization_db(...) or load_personalization()` fallback leaked
+    the owner's profile into every tenant's prompt."""
+    user_id = user["id"]
     settings = await db.load_settings(user_id)
     cfg_data = {
         "channels": settings.get("channels") or [],
@@ -39,7 +46,9 @@ async def _build_user_config(user_id: str) -> tuple:
         "last_digest_time": settings.get("last_digest_time") or "",
         "interaction_history": settings.get("interaction_history") or [],
     }
-    cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
+    cfg_yaml = resolve_personalization(
+        settings.get("personalization"), user.get("tg_user_id")
+    )
     # Per-user recent digests for de-dup context (scoped to THIS user, not global).
     recent = await db.load_user_history(user_id, limit=3)
     return build_pipeline_config(cfg_data, cfg_yaml, recent_digests=recent), settings
@@ -56,7 +65,7 @@ async def deliver_digest(bot, user: dict, *, on_status=None) -> int:
     user_id = user["id"]
     tg_user_id = user["tg_user_id"]
 
-    config, _settings = await _build_user_config(user_id)
+    config, _settings = await _build_user_config(user)
     llm_client = make_openrouter_client(OPENROUTER_KEY)
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
         result = await run_digest_pipeline(
