@@ -234,6 +234,17 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Any onb| callback clears the ephemeral typing sub-state.
     context.user_data.pop("onb_substate", None)
 
+    # Replay guard: a finished user can re-tap an old onboarding inline button
+    # still living in their chat history (Telegram keeps keyboards alive). Without
+    # this, "Пропустить →" / a topic chip would re-enter the wizard, re-trigger
+    # the preview pipeline (bypassing the daily cap) AND clobber current_focus.
+    # Info popups are harmless and stay allowed; everything state-changing stops.
+    if user.get("onboarding_state") == ST_DONE and action not in {
+        "info_intro", "info_ch", "info_focus",
+    }:
+        await q.answer("Онбординг уже завершён — пользуйся кнопками меню снизу 👇")
+        return
+
     if action == "info_intro":
         await q.answer(
             "Бот читает публичные Telegram-каналы, которые ты выберешь, и раз в "

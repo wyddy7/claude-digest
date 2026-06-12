@@ -191,6 +191,37 @@ async def test_topic_toggle_merges_and_dedups(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_finished_user_replay_button_blocked_no_preview(monkeypatch):
+    """B1 replay guard: a user whose onboarding_state is 'done' re-taps an old
+    'Пропустить →' inline button from chat history. It must NOT re-enter the
+    wizard, NOT run _set_focus (which would clobber current_focus) and NOT trigger
+    the preview pipeline — just a polite popup."""
+    fired = []
+    monkeypatch.setattr(onb, "_set_focus", AsyncMock(side_effect=lambda *a, **k: fired.append("focus")))
+    monkeypatch.setattr(onb, "_run_preview", AsyncMock(side_effect=lambda *a, **k: fired.append("preview")))
+
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER, "onboarding_state": onb.ST_DONE}
+
+    upd = make_update(callback_data="onb|focus_skip")
+    await onb.cb(upd, ctx)
+
+    assert fired == [], "finished user's replayed button must not advance the wizard"
+    assert upd.callback_query.answers, "should answer with a popup"
+
+
+@pytest.mark.asyncio
+async def test_finished_user_info_popup_still_allowed(monkeypatch):
+    """The replay guard must NOT block harmless info popups for a finished user."""
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER, "onboarding_state": onb.ST_DONE}
+    upd = make_update(callback_data="onb|info_focus")
+    await onb.cb(upd, ctx)
+    # info_focus answers with show_alert=True and its own text, not the guard text.
+    assert upd.callback_query.answers[-1][1] is True
+
+
+@pytest.mark.asyncio
 async def test_topic_merge_respects_cap(monkeypatch):
     monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=2))
     monkeypatch.setattr(onb, "_TOPICS", {"ai": ["a", "b", "c", "d"]})
