@@ -59,8 +59,7 @@ def _checkin_text(focus: str) -> str:
 
 
 async def send_checkin(bot, tg_user_id: int, focus: str = "") -> None:
-    """Send a single check-in message to one user. Called by the fan-out loop and
-    (for the owner) directly from the legacy run_checkin wrapper."""
+    """Send a single check-in message to one user. Called by the fan-out loop."""
     from telegram.helpers import escape_markdown
 
     safe_focus = escape_markdown(focus, version=1) if focus else ""
@@ -120,22 +119,19 @@ async def _safe_answer(query, text: str = "", show_alert: bool = False) -> None:
 
 
 async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ci_yes / ci_no / ci_talk callbacks for ANY user (owner or tenant).
+    """Handle ci_yes / ci_no / ci_talk callbacks for any user.
 
     The callback is routed here via pattern=r"^ci_" in bot.py.  The user-scoped
-    state (last_digest, chat mode) is read from the per-user DB row for tenants
-    and from the legacy db.load() for the owner (preserving the existing
-    behaviour for the owner path until the final cutover chunk).
+    state (last_digest, chat mode) is read from the per-user DB row resolved by
+    the middleware (context.user_data["user"]).
     """
     from bot import DIGEST_HOUR, DIGEST_MINUTE  # schedule constants live in bot.py
 
     q = update.callback_query
     action = q.data
 
-    # Resolve the calling user.  Tenants have context.user_data["user"]; the owner
-    # goes through the legacy single-tenant path — fall back to db.load().
+    # The middleware resolves the calling user into context.user_data["user"].
     user_row = context.user_data.get("user")
-    is_owner = context.user_data.get("is_owner", False)
 
     if action == "ci_yes":
         await _safe_answer(q, CHECKIN_YES_ANSWER)
@@ -145,11 +141,8 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     elif action == "ci_no":
         await _safe_answer(q)
-        # Fetch last_digest from the right store.
-        if is_owner:
-            data = await db.load()
-            last_digest = data.get("last_digest") or ""
-        elif user_row:
+        # Fetch this user's last_digest from their settings row.
+        if user_row:
             settings = await db.load_settings(user_row["id"])
             last_digest = settings.get("last_digest") or ""
         else:

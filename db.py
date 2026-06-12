@@ -83,31 +83,19 @@ def _get_client() -> AsyncClient:
     return _client
 
 
-# ─── user_state (replaces data.json) ─────────────────────────────────────────
+# ─── user_state (legacy id=1 global) ─────────────────────────────────────────
+# The single-tenant write path (save/add_history) was removed in the cutover —
+# the owner is now a normal users+user_settings row. load() / _row_to_state()
+# survive only as READ helpers: agent.py's legacy global chat tools and
+# ensure_owner_user's one-time seeding read of the legacy row.
 
 async def load() -> dict:
-    """Load user state row (id=1). Returns dict with defaults if missing."""
+    """Read the legacy user_state row (id=1). Returns dict with defaults if
+    missing. READ-ONLY surface — there is no longer a paired save()."""
     resp = await _get_client().table("user_state").select("*").eq("id", 1).execute()
     if not resp.data:
         return _defaults()
     return _row_to_state(resp.data[0])
-
-
-async def save(data: dict) -> None:
-    """Upsert user state (id=1)."""
-    clean = _sanitize(data)
-    payload = {
-        "id": 1,
-        "channels": clean.get("channels", DEFAULT_CHANNELS),
-        "current_focus": clean.get("current_focus", ""),
-        "focus_auto_reset": clean.get("focus_auto_reset", False),
-        "model": clean.get("model", DEFAULT_MODEL),
-        "last_digest": clean.get("last_digest", ""),
-        "last_digest_time": clean.get("last_digest_time", ""),
-        "interaction_history": clean.get("interaction_history", []),
-    }
-    await _get_client().table("user_state").upsert(payload).execute()
-    logger.debug("db.save done")
 
 
 def _defaults() -> dict:
@@ -122,15 +110,6 @@ def _defaults() -> dict:
     }
 
 
-def _sanitize(data: dict) -> dict:
-    clean = dict(data)
-    clean.pop("openrouter_key", None)
-    clean.pop("description", None)
-    clean.setdefault("channels", DEFAULT_CHANNELS[:])
-    clean.setdefault("focus_auto_reset", False)
-    return clean
-
-
 def _row_to_state(row: dict) -> dict:
     channels = row["channels"] if isinstance(row["channels"], list) else json.loads(row["channels"])
     history = row["interaction_history"] if isinstance(row["interaction_history"], list) else json.loads(row["interaction_history"])
@@ -143,17 +122,6 @@ def _row_to_state(row: dict) -> dict:
         "last_digest_time": row.get("last_digest_time") or "",
         "interaction_history": history or [],
     }
-
-
-# ─── interaction_history helper ───────────────────────────────────────────────
-
-async def add_history(entry: str) -> None:
-    """Append a short entry to interaction_history (kept last 20)."""
-    data = await load()
-    history = data.get("interaction_history", [])
-    history.append(f"{datetime.now().strftime('%d.%m %H:%M')} — {entry[:120]}")
-    data["interaction_history"] = history[-20:]
-    await save(data)
 
 
 # ─── digests (replaces digests_history.json) ──────────────────────────────────

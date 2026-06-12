@@ -28,6 +28,7 @@ class FakeMessage:
     def __init__(self, text=""):
         self.text = text
         self.replies = []
+        self.successful_payment = None
 
     async def reply_text(self, text, **kw):
         self.replies.append((text, kw))
@@ -77,7 +78,6 @@ def make_update(*, tg_user_id=USER, text=None, callback_data=None):
 
 @pytest.mark.asyncio
 async def test_invite_gate_blocks_unknown_user(monkeypatch):
-    monkeypatch.setattr(mw, "OWNER_ID", OWNER)
     monkeypatch.setattr(db_module, "get_user_by_tg_id", AsyncMock(return_value=None))
     upd = make_update(text="/start")
     ctx = FakeContext()
@@ -90,15 +90,25 @@ async def test_invite_gate_blocks_unknown_user(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_owner_falls_through(monkeypatch):
-    monkeypatch.setattr(mw, "OWNER_ID", OWNER)
-    get_user = AsyncMock()
-    monkeypatch.setattr(db_module, "get_user_by_tg_id", get_user)
-    upd = make_update(tg_user_id=OWNER, text="/start")
+async def test_owner_flows_through_unified_path(monkeypatch):
+    """After the cutover the owner is a normal users row (state='done'). They are
+    NOT special-cased: resolve_user attaches the row and dispatches a non-/start
+    message into the chat router (no is_owner flag anywhere)."""
+    owner_row = {"id": "uuid-owner", "tg_user_id": OWNER, "onboarding_state": "done"}
+    monkeypatch.setattr(db_module, "get_user_by_tg_id", AsyncMock(return_value=owner_row))
+    from handlers import chat as chat_surface
+    route = AsyncMock()
+    monkeypatch.setattr(chat_surface, "route_text", route)
+
+    upd = make_update(tg_user_id=OWNER, text="привет")
     ctx = FakeContext()
-    await mw.resolve_user(upd, ctx)  # no raise
-    assert ctx.user_data["is_owner"] is True
-    get_user.assert_not_called()
+    from telegram.ext import ApplicationHandlerStop
+    with pytest.raises(ApplicationHandlerStop):
+        await mw.resolve_user(upd, ctx)
+
+    assert ctx.user_data["user"] is owner_row
+    assert "is_owner" not in ctx.user_data
+    route.assert_awaited_once()
 
 
 # ── requires_tier ─────────────────────────────────────────────────────────────
@@ -112,7 +122,6 @@ async def test_requires_tier_allows_active_trial():
         calls.append(True)
 
     ctx = FakeContext()
-    ctx.user_data["is_owner"] = False
     ctx.user_data["user"] = {
         "tg_user_id": USER,
         "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
@@ -133,7 +142,6 @@ async def test_requires_tier_gates_expired(monkeypatch):
         calls.append(True)
 
     ctx = FakeContext()
-    ctx.user_data["is_owner"] = False
     ctx.user_data["user"] = {
         "tg_user_id": USER,
         "trial_ends_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
@@ -145,7 +153,9 @@ async def test_requires_tier_gates_expired(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_owner_bypasses_gate():
+async def test_owner_passes_gate_as_active_pro():
+    """The owner has no bypass after the cutover — they pass the gate the same
+    way any active pro user does, off a far-future pro_until on their row."""
     calls = []
 
     @mw.requires_tier("trial_or_paid")
@@ -153,7 +163,10 @@ async def test_owner_bypasses_gate():
         calls.append(True)
 
     ctx = FakeContext()
-    ctx.user_data["is_owner"] = True
+    ctx.user_data["user"] = {
+        "tg_user_id": OWNER,
+        "pro_until": (datetime.now(timezone.utc) + timedelta(days=365 * 100)).isoformat(),
+    }
     await handler(make_update(text="x"), ctx)
     assert calls == [True]
 

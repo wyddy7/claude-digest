@@ -217,11 +217,10 @@ class FakeBot:
 
 
 class FakeContext:
-    def __init__(self, user_row=None, is_owner=False):
+    def __init__(self, user_row=None):
         self.user_data = {}
         if user_row:
             self.user_data["user"] = user_row
-        self.user_data["is_owner"] = is_owner
         self.bot = FakeBot()
 
 
@@ -229,7 +228,7 @@ class FakeContext:
 async def test_cb_ci_yes_edits_message(monkeypatch):
     """ci_yes should answer the query and edit to the 'tomorrow at HH:MM' text."""
     upd, q = _make_update("ci_yes")
-    ctx = FakeContext(is_owner=True)
+    ctx = FakeContext()
 
     await checkin_mod.cb_checkin(upd, ctx)
 
@@ -277,29 +276,10 @@ async def test_cb_ci_no_empty_digest_for_tenant(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cb_ci_no_owner_uses_legacy_load(monkeypatch):
-    """ci_no for the owner reads from the legacy db.load() path."""
-    upd, q = _make_update("ci_no", chat_id=999)
-    ctx = FakeContext(is_owner=True)
-
-    monkeypatch.setattr(
-        db_module, "load",
-        AsyncMock(return_value={"last_digest": "<b>owner digest</b>"}),
-    )
-
-    await checkin_mod.cb_checkin(upd, ctx)
-
-    assert q.edits and CHECKIN_NO_PREFIX in q.edits[0]
-    assert ctx.bot.sent
-    _, resent_text = ctx.bot.sent[0]
-    assert "owner digest" in resent_text
-
-
-@pytest.mark.asyncio
 async def test_cb_ci_talk_sets_chat_state():
     """ci_talk sets context.user_data['state'] = 'chat' and edits the message."""
     upd, q = _make_update("ci_talk")
-    ctx = FakeContext(is_owner=True)
+    ctx = FakeContext(user_row={"id": _UUID_A, "tg_user_id": _TG_A})
 
     await checkin_mod.cb_checkin(upd, ctx)
 

@@ -1,13 +1,9 @@
-"""Surface 6 — 📚 История for multi-tenant (non-owner) users.
+"""Surface 6 — 📚 История for every user (unified multi-tenant path).
 
 Paginated list of the caller's digest history read from the `digests` table
-filtered by user_id — tenants never see each other's rows. The single-viewer
-callback reuses the same approach as the legacy owner cb_hv in bot.py but
-operates on tenant-scoped rows.
+filtered by user_id — users never see each other's rows.
 
 Callback namespace: h| (history page = h|p|<page>, history view = h|v|<idx>).
-These patterns are distinct from the legacy owner patterns (hp|, hv|) so both
-can be registered in bot.py without collision during the transition period.
 
 All user-facing text is imported from handlers.strings.
 """

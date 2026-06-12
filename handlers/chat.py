@@ -37,6 +37,7 @@ from handlers.strings import (
     CHAT_LIMIT_HIT,
     CHAT_THINKING,
     FALLBACK,
+    ONBOARDING_MENU_READY as MENU_READY,
 )
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,16 @@ async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 4) Utility commands (tenant-safe: read caller's row, not global state).
     user = context.user_data.get("user")
+    if text in ("/menu", "/menu@DigestBot"):
+        focus = ""
+        if user:
+            try:
+                s = await db.load_settings(user["id"])
+                focus = s.get("current_focus") or ""
+            except Exception:
+                focus = ""
+        await update.message.reply_text(MENU_READY, reply_markup=main_kb_saas(focus))
+        return
     if text in ("/next", "/next@DigestBot"):
         await _cmd_next(update)
         return

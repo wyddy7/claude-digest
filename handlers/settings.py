@@ -1,20 +1,16 @@
-"""Surface 5 — ⚙️ Настройки for multi-tenant (non-owner) users.
+"""Surface 5 — ⚙️ Настройки for every user (unified multi-tenant path).
 
 Provides: list/add/remove channels (limit-capped via get_effective_limit),
 model picker, focus edit (🎯), and focus auto-reset toggle.
 
-Mirrors the BEHAVIOUR of the legacy owner path in bot.py
-(cb_model / cb_channels / cb_rmch / cb_addch / cb_back_settings /
-cb_toggle_autoreset + focus edit) but reads/writes user_settings rows
-keyed on the user's UUID (via db.load_settings / db.save_settings) and
-resolves per-user limits from db.get_effective_limit.
+Reads/writes user_settings rows keyed on the user's UUID (via db.load_settings /
+db.save_settings) and resolves per-user limits from db.get_effective_limit.
 
 All user-facing text is imported from handlers.strings. The module
 introduces NO new hard-coded quota constants — every numeric gate uses
 get_effective_limit.
 
-Callback namespace: s| (to avoid collisions with the owner's flat
-callback_data patterns in bot.py).
+Callback namespace: s|.
 """
 
 import logging
@@ -45,8 +41,7 @@ logger = logging.getLogger(__name__)
 # Reuse the same permissive username regex as onboarding (C3).
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
 
-# Available model choices (parallel to the owner's MODELS dict in bot.py so the
-# owner's single-tenant settings and per-tenant settings offer the same set).
+# Available model choices offered to every user.
 AVAILABLE_MODELS: dict[str, str] = {
     "🚀 Claude Sonnet 4.6": "anthropic/claude-sonnet-4.6",
     "⚡ Claude Haiku 4.5": "anthropic/claude-haiku-4.5",

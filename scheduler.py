@@ -28,91 +28,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 MOSCOW = pytz.timezone("Europe/Moscow")
-
-
-async def run_digest():
-    logger.info("Scheduled digest starting")
-    async with Bot(BOT_TOKEN) as bot:
-        status_msg = None
-
-        async def _on_status(text: str):
-            nonlocal status_msg
-            try:
-                if status_msg is None:
-                    status_msg = await bot.send_message(CHAT_ID, text)
-                else:
-                    await status_msg.edit_text(text)
-            except Exception as e:
-                logger.warning(f"scheduler: status update failed: {e}")
-
-        cfg_data = await db.load()
-        cfg_yaml = load_personalization()
-        config = build_pipeline_config(cfg_data, cfg_yaml)
-        llm_client = make_openrouter_client(OPENROUTER_KEY)
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
-            result = await run_digest_pipeline(
-                config, llm_client=llm_client, fetcher=fetcher, on_status=_on_status
-            )
-
-        digest_html = result["digest_html"]
-        personal_html = result.get("personal_html", "")
-        stats_html = result.get("stats_html", "")
-        posts_count = result.get("posts_count", 0)
-
-        if status_msg:
-            try:
-                await status_msg.edit_text("✅ Готово")
-            except Exception:
-                pass
-
-        # Save to user_state
-        data = await db.load()
-        if data.get("focus_auto_reset") and data.get("current_focus"):
-            data["current_focus"] = ""
-        data["last_digest"] = digest_html
-        import datetime
-        data["last_digest_time"] = datetime.datetime.now().isoformat()
-        await db.save(data)
-        await db.add_history(f"Дайджест ({posts_count} постов)")
-
-        from datetime import datetime as dt
-        date_str = dt.now(MOSCOW).strftime("%d.%m.%Y")
-        full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
-
-        max_len = 4096
-        chunks = []
-        if len(full_text) <= max_len:
-            chunks = [full_text]
-        else:
-            paragraphs = full_text.split("\n\n")
-            current = ""
-            for para in paragraphs:
-                if len(current) + len(para) + 2 <= max_len:
-                    current = current + ("\n\n" if current else "") + para
-                else:
-                    if current:
-                        chunks.append(current)
-                    while len(para) > max_len:
-                        chunks.append(para[:max_len])
-                        para = para[max_len:]
-                    current = para
-            if current:
-                chunks.append(current)
-
-        for chunk in chunks:
-            await bot.send_message(CHAT_ID, chunk, parse_mode="HTML", disable_web_page_preview=True)
-
-        personal_parts = [p for p in [personal_html, stats_html] if p]
-        if personal_parts:
-            await bot.send_message(
-                CHAT_ID, "\n\n".join(personal_parts),
-                parse_mode="HTML", disable_web_page_preview=True,
-            )
-
-    logger.info(f"Scheduled digest done: {posts_count} posts")
 
 
 async def _deliver_user_digest(bot, user: dict) -> int:
@@ -159,16 +76,14 @@ async def _deliver_user_digest(bot, user: dict) -> int:
 
 async def run_digest_fanout():
     """Multi-tenant fan-out tick: iterate active users, gate each on subscription
-    state, deliver per-user. If no users rows exist (legacy mode), fall through to
-    the existing single-tenant run_digest() so the live bot is unaffected.
+    state, deliver per-user. The owner is a normal users row (seeded by
+    db.ensure_owner_user), so the fan-out always covers them.
 
-    STUB: per-user errors are isolated (one user's failure never blocks others);
-    expiry-warning + delivery gating are wired, the per-user pipeline reuse is the
-    surface a later stage hardens (rate limits, parallelism caps, retries)."""
+    Per-user errors are isolated (one user's failure never blocks others);
+    expiry-warning + delivery gating are wired."""
     users = await db.list_active_users()
     if not users:
-        logger.info("Fan-out: no users rows — legacy single-tenant path")
-        await run_digest()
+        logger.info("Fan-out: no active users — nothing to deliver")
         return
 
     logger.info(f"Fan-out: {len(users)} active user(s)")
@@ -210,24 +125,10 @@ async def run_checkin():
 
     Delegates to handlers.checkin.run_checkin_fanout which iterates active users,
     gates each on subscriptions.is_subscription_active, reads per-user focus from
-    user_settings, and delivers the check-in to their tg_user_id.
-
-    If no users rows exist in the DB (legacy single-tenant mode), falls back to
-    sending a check-in directly to CHAT_ID (legacy owner path) so the live bot is
-    unaffected before the multi-tenant table is populated.
+    user_settings, and delivers the check-in to their tg_user_id. The owner is a
+    normal users row, so the fan-out covers them too.
     """
-    from handlers.checkin import run_checkin_fanout, send_checkin
-
-    users = await db.list_active_users()
-    if not users:
-        # Legacy fallback: no users table yet — send to owner CHAT_ID.
-        logger.info("checkin: no users rows — legacy single-tenant path")
-        data = await db.load()
-        focus = data.get("current_focus", "")
-        async with Bot(BOT_TOKEN) as bot:
-            await send_checkin(bot, CHAT_ID, focus)
-        logger.info("Scheduled checkin sent (legacy path)")
-        return
+    from handlers.checkin import run_checkin_fanout
 
     await run_checkin_fanout(BOT_TOKEN)
     logger.info("Scheduled checkin fan-out complete")
@@ -245,8 +146,7 @@ async def _run():
     logger.info("DB ready (supabase-py)")
 
     scheduler = AsyncIOScheduler(timezone=MOSCOW)
-    # Multi-tenant fan-out tick. Falls back to the legacy single-tenant run_digest()
-    # when no users rows exist, so the live single-tenant bot is unaffected.
+    # Multi-tenant fan-out tick — iterates every active users row (owner included).
     scheduler.add_job(run_digest_fanout, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")
     scheduler.add_job(run_checkin, "cron", hour=CHECKIN_HOUR, minute=CHECKIN_MINUTE, misfire_grace_time=300, name="daily_checkin")
 

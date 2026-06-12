@@ -1,7 +1,7 @@
-"""Shared main reply keyboard for the multi-tenant (non-owner) path.
+"""Shared main reply keyboard for the unified multi-tenant path.
 
-6 buttons per SPEC-ux §1: 📰 📚 👤 ⚙️ 🎯 💎. The owner keeps the legacy 5-button
-keyboard (bot.main_kb) untouched — this is only for invited tenants.
+6 buttons per SPEC-ux §1: 📰 📚 👤 ⚙️ 🎯 💎. Every user — the owner included —
+gets this keyboard; there is no separate single-tenant keyboard after the cutover.
 """
 
 from telegram import ReplyKeyboardMarkup

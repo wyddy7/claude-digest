@@ -1,12 +1,13 @@
 """Identity resolution, invite gate, and the @requires_tier decorator.
 
-`resolve_user` replaces the legacy single-owner `check_owner` TypeHandler. It:
-  * always lets the owner (OWNER_ID) through to the legacy single-tenant path
-    in bot.py — that path is unchanged;
-  * for every other user, looks up the `users` row by numeric tg_user_id and
-    enforces the invite gate (no row -> "invite-only" reply + stop);
+`resolve_user` is the single group=-1 middleware. For EVERY user (the owner
+included — the owner is a normal `users` row seeded by db.ensure_owner_user) it:
+  * looks up the `users` row by numeric tg_user_id and enforces the invite gate
+    (no row -> "invite-only" reply + stop);
   * attaches the resolved row to context.user_data["user"] for downstream
-    handlers and the @requires_tier decorator.
+    handlers and the @requires_tier decorator;
+  * dispatches text/commands into the handlers/ package and stops, so there is
+    exactly one multi-tenant code path.
 
 No PTB business logic beyond routing lives here. Subscription activeness is
 ALWAYS computed at runtime from pro_until/trial_ends_at via subscriptions.py —
@@ -14,7 +15,6 @@ never read off a stored tier string.
 """
 
 import logging
-import os
 
 from telegram import Update
 from telegram.ext import ApplicationHandlerStop, ContextTypes
@@ -25,30 +25,25 @@ from handlers.strings import INVITE_ONLY
 
 logger = logging.getLogger(__name__)
 
-OWNER_ID = int(os.getenv("CHAT_ID", "0"))
-
 # Keep the old name as an alias so any external references still work.
 INVITE_ONLY_TEXT = INVITE_ONLY
 
-
-def is_owner(tg_user_id: int) -> bool:
-    """The owner keeps the legacy single-tenant path and bypasses all gating."""
-    return OWNER_ID != 0 and tg_user_id == OWNER_ID
+# Commands that have their own CommandHandlers in bot.py (payments + admin).
+# The middleware lets these fall through instead of routing them into the
+# menu/chat dispatcher, so they reach the owner/admin like any other user.
+_FALLTHROUGH_COMMANDS = ("/buy", "/give_pro", "/revoke_pro", "/grant_trial", "/reset_user")
 
 
 async def resolve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """group=-1 middleware. Owner -> fall through to legacy handlers. Non-owner ->
-    invite-gate + attach the users row to context.user_data["user"]."""
+    """group=-1 middleware. Invite-gate + attach the users row to
+    context.user_data["user"], then dispatch into the handlers/ package. The
+    owner flows through the SAME path as everyone else (their seeded row carries
+    onboarding_state='done' + pro, so they land on the menu, not the wizard)."""
     user = update.effective_user
     if not user:
         return  # service updates without a user — let them pass
     tg_user_id = user.id
 
-    if is_owner(tg_user_id):
-        context.user_data["is_owner"] = True
-        return  # legacy owner path in bot.py handles everything
-
-    context.user_data["is_owner"] = False
     row = await db.get_user_by_tg_id(tg_user_id)
     if not row:
         # No invite row exists. Politely refuse and stop — no row is created.
@@ -60,19 +55,20 @@ async def resolve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["user"] = row
 
-    # Non-owner message/command dispatch happens here, then we stop so the legacy
-    # owner handlers in bot.py never see this update. Callback updates (onb|/buy|)
-    # fall through to their dedicated CallbackQueryHandlers (patterns the owner UI
-    # never emits), so they are NOT dispatched here.
+    # Message/command dispatch happens here, then we stop. Callback updates
+    # (onb|/buy|/s|/h|/ci_) fall through to their dedicated CallbackQueryHandlers,
+    # so they are NOT dispatched here.
     if update.callback_query:
         return
     if update.message:
         from handlers import onboarding as onboarding_surface
         from handlers import chat as chat_surface
 
-        # Payment surfaces must reach non-owners: let the Stars success service
-        # message and the /buy command fall through to their dedicated handlers.
-        if update.message.successful_payment or (update.message.text or "").startswith("/buy"):
+        # Payment + admin surfaces have their own CommandHandlers in bot.py — let
+        # the Stars success service message and these commands fall through to
+        # them instead of dispatching into the menu/chat router.
+        msg_text_raw = update.message.text or ""
+        if update.message.successful_payment or msg_text_raw.startswith(_FALLTHROUGH_COMMANDS):
             return
 
         msg_text = update.message.text or ""
@@ -113,17 +109,15 @@ def requires_tier(level: str):
                               are enforced at the call site via get_effective_limit,
                               not here).
 
-    The owner always bypasses. On failure the single path is the paywall message
-    (subscription surface), never a bare "no access". Numeric caps (channel count,
-    chat turns, history depth) are NOT checked here — they are read per-user at the
-    call site via db.get_effective_limit.
+    On failure the single path is the paywall message (subscription surface),
+    never a bare "no access". The owner's seeded row carries a far-future
+    pro_until, so they pass this gate like any active pro user. Numeric caps
+    (channel count, chat turns, history depth) are NOT checked here — they are
+    read per-user at the call site via db.get_effective_limit.
     """
 
     def decorator(handler):
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if context.user_data.get("is_owner"):
-                return await handler(update, context)
-
             user_row = context.user_data.get("user")
             if user_row and _effective_tier_active(user_row):
                 return await handler(update, context)

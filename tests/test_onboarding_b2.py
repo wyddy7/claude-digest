@@ -31,7 +31,6 @@ from handlers import middleware as mw
 from handlers import onboarding as onb
 
 # ── synthetic ids (never real user data) ──────────────────────────────────────
-OWNER_ID = 111111111
 INVITED_USER = 222222222
 UNINVITED_USER = 333333333
 
@@ -257,7 +256,6 @@ def patch_db(fdb, monkeypatch):
 async def test_non_invited_gets_gate_no_row_created(fdb, monkeypatch):
     """A tg_user_id that has no row in users gets the invite-only reply.
     No users or user_settings row is created."""
-    monkeypatch.setattr(mw, "OWNER_ID", OWNER_ID)
     upd = _make_update(tg_user_id=UNINVITED_USER, text="/start")
     ctx = FakeContext()
 
