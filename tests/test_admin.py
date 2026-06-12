@@ -445,3 +445,18 @@ async def test_reset_user_missing_arg_replies_usage(fdb, monkeypatch):
     update.message.reply_text.assert_awaited_once()
     reply = update.message.reply_text.await_args.args[0]
     assert "reset_user" in reply.lower() or "использование" in reply.lower()
+
+
+# ─── routing invariant: dedicated commands must fall through the catch-all ─────
+
+def test_dedicated_commands_are_in_fallthrough_list():
+    """Every command with its own CommandHandler in bot.py MUST be listed in
+    middleware._FALLTHROUGH_COMMANDS — otherwise resolve_user's catch-all routes
+    it into the chat agent and the command silently never fires. /stats hit
+    exactly this bug: registered but eaten by chat until added here. This pins the
+    invariant so a future dedicated command can't regress the same way."""
+    from handlers import middleware
+
+    dedicated = {"/buy", "/give_pro", "/revoke_pro", "/grant_trial", "/reset_user", "/stats"}
+    missing = dedicated - set(middleware._FALLTHROUGH_COMMANDS)
+    assert not missing, f"dedicated commands not in _FALLTHROUGH_COMMANDS: {missing}"

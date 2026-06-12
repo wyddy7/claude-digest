@@ -31,7 +31,7 @@ INVITE_ONLY_TEXT = INVITE_ONLY
 # Commands that have their own CommandHandlers in bot.py (payments + admin).
 # The middleware lets these fall through instead of routing them into the
 # menu/chat dispatcher, so they reach the owner/admin like any other user.
-_FALLTHROUGH_COMMANDS = ("/buy", "/give_pro", "/revoke_pro", "/grant_trial", "/reset_user")
+_FALLTHROUGH_COMMANDS = ("/buy", "/give_pro", "/revoke_pro", "/grant_trial", "/reset_user", "/stats")
 
 
 async def resolve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
