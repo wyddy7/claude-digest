@@ -214,6 +214,7 @@ async def _run():
         return
 
     await db.init_supabase(url, key)
+    await db.ensure_owner_user()
     logger.info("DB ready (supabase-py)")
 
     scheduler = AsyncIOScheduler(timezone=MOSCOW)

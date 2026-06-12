@@ -509,6 +509,98 @@ async def list_active_users() -> list[dict]:
 list_users_for_delivery = list_active_users
 
 
+async def ensure_owner_user() -> None:
+    """Idempotent backfill: if the env CHAT_ID owner has no users row, create one
+    with tier='pro', a far-future pro_until (~100 years), onboarding_state='done',
+    trial_used=True, and a paired user_settings row seeded from the legacy
+    user_state (id=1) if present, otherwise from the 'pro' tier defaults.
+
+    Safe to call multiple times — returns immediately if the row already exists
+    and never downgrades or re-grants existing rows.
+
+    The owner's numeric Telegram id is read from env (CHAT_ID); it is never
+    hardcoded in this module.
+    """
+    import os
+
+    raw = os.getenv("CHAT_ID", "0")
+    try:
+        owner_tg_id = int(raw)
+    except ValueError:
+        logger.warning("ensure_owner_user: CHAT_ID not an integer (%r) — skipping", raw)
+        return
+    if owner_tg_id == 0:
+        logger.warning("ensure_owner_user: CHAT_ID=0 — skipping")
+        return
+
+    existing = await get_user_by_tg_id(owner_tg_id)
+    if existing:
+        logger.debug("ensure_owner_user: owner row already present (id=%s), no-op", existing.get("id"))
+        return
+
+    # Far-future pro_until: ~100 years from now.
+    far_future = (datetime.now(timezone.utc) + timedelta(days=365 * 100)).isoformat()
+
+    client = _get_client()
+    try:
+        resp = await client.table("users").insert({
+            "tg_user_id": owner_tg_id,
+            "tier": "pro",
+            "onboarding_state": "done",
+            "trial_used": True,
+            "is_active": True,
+            "pro_until": far_future,
+        }).execute()
+        user = resp.data[0]
+    except Exception as e:
+        if APIError is not None and isinstance(e, APIError) and _is_unique_violation(e):
+            logger.info("ensure_owner_user: insert race, owner row already created — no-op")
+            return
+        raise
+
+    user_id = user["id"]
+
+    # Seed user_settings from legacy user_state if it exists; else from pro defaults.
+    legacy: Optional[dict] = None
+    try:
+        resp2 = await client.table("user_state").select("*").eq("id", 1).execute()
+        if resp2.data:
+            legacy = _row_to_state(resp2.data[0])
+    except Exception as e:
+        logger.warning("ensure_owner_user: failed to load legacy user_state: %s", e)
+
+    if legacy:
+        settings_payload: dict = {
+            "user_id": user_id,
+            "channels": legacy.get("channels") or DEFAULT_CHANNELS[:],
+            "current_focus": legacy.get("current_focus") or "",
+            "model": legacy.get("model") or DEFAULT_MODEL,
+            "last_digest": legacy.get("last_digest") or "",
+            "last_digest_time": legacy.get("last_digest_time") or "",
+            "interaction_history": legacy.get("interaction_history") or [],
+        }
+    else:
+        pro_limits = await get_tier_limits("pro")
+        settings_payload = {
+            "user_id": user_id,
+            "limits": pro_limits,
+        }
+
+    try:
+        await client.table("user_settings").insert(settings_payload).execute()
+    except Exception as e:
+        if APIError is not None and isinstance(e, APIError) and _is_unique_violation(e):
+            logger.info("ensure_owner_user: user_settings already exists — no-op")
+        else:
+            raise
+
+    logger.info(
+        "ensure_owner_user: owner backfilled as pro row (user_id=%s, pro_until=%s, "
+        "seeded_from=%s)",
+        user_id, far_future[:10], "legacy_user_state" if legacy else "pro_defaults",
+    )
+
+
 async def load_personalization_db(tenant_id: str) -> dict:
     """Return the personalization JSONB for a tenant (the user's UUID id). Falls
     back to an empty dict — the caller (build_pipeline_config consumer) then uses

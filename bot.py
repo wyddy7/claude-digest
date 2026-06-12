@@ -545,6 +545,7 @@ async def _post_init(app: Application) -> None:
         raise RuntimeError("SUPABASE_URL and SUPABASE_KEY are required")
 
     await db.init_supabase(SUPABASE_URL, SUPABASE_KEY)
+    await db.ensure_owner_user()
 
     from langgraph.checkpoint.memory import MemorySaver
     app.bot_data["checkpointer"] = MemorySaver()
