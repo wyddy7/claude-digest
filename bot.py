@@ -596,9 +596,12 @@ def main():
 
     app.add_handler(TypeHandler(Update, resolve_user), group=-1)
 
+    from handlers import settings as settings_surface
+
     # Non-owner callback surfaces (patterns the owner UI never emits).
     app.add_handler(CallbackQueryHandler(onboarding_surface.cb, pattern=r"^onb\|"))
     app.add_handler(CallbackQueryHandler(subscription_surface.cb_buy, pattern=r"^buy\|"))
+    app.add_handler(CallbackQueryHandler(settings_surface.cb, pattern=r"^s\|"))
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_start))

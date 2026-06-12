@@ -119,3 +119,27 @@ SUB_PAYMENT_DUPLICATE = (
     "Платёж уже учтён ✅\n"
     "Подписка активна до {active_until}."
 )
+
+# ── settings surface ──────────────────────────────────────────────────────────
+SETTINGS_HEADER = "⚙️ *Настройки*"
+SETTINGS_CHANNELS_HEADER = "📡 *Каналы* — нажми ❌ чтобы удалить:"
+
+SETTINGS_ADDCH_PROMPT = "Введи юзернейм канала без @:\n\n/cancel — отмена"
+SETTINGS_ADDCH_OK = "✅ Канал {channel} добавлен!"
+SETTINGS_ADDCH_ALREADY = "Этот канал уже есть в твоём списке."
+SETTINGS_ADDCH_INVALID = (
+    "Неподходящее имя канала. Допустимые символы: a–z, 0–9, _, длина 4–32."
+)
+SETTINGS_ADDCH_LIMIT_HIT = (
+    "Достигнут лимит каналов ({cap}). "
+    "Удали один или оформи Pro, чтобы добавить больше."
+)
+SETTINGS_RMCH_OK = "Удалён: {channel}"
+
+SETTINGS_FOCUS_PROMPT = (
+    "На что фокусироваться в следующем дайджесте?\n/cancel — отмена"
+)
+SETTINGS_FOCUS_OK = "✅ Фокус: {focus}"
+
+SETTINGS_TOGGLE_AUTORESET_ON = "Авто-сброс фокуса: ВКЛ ✅"
+SETTINGS_TOGGLE_AUTORESET_OFF = "Авто-сброс фокуса: ВЫКЛ"
