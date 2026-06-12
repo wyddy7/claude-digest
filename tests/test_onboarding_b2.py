@@ -341,7 +341,17 @@ async def test_full_wizard_walk_topic_focus_preview(fdb, monkeypatch):
     """
     # Seed invited user row.
     _seed_invited(fdb, INVITED_USER)
-    monkeypatch.setattr(subs_module, "grant_trial", AsyncMock(return_value=True))
+
+    # Mirror production grant_trial: it WRITES trial_ends_at to the row, which is
+    # what the preview gate (no LLM spend without an active sub) checks later.
+    async def _grant_trial(tg_id):
+        fdb.users[tg_id]["trial_ends_at"] = (
+            datetime.now(timezone.utc) + timedelta(days=3)
+        ).isoformat()
+        fdb.users[tg_id]["trial_used"] = True
+        return True
+
+    monkeypatch.setattr(subs_module, "grant_trial", _grant_trial)
 
     # ── Step 0: /start → wizard entry ─────────────────────────────────────────
     ctx = FakeContext()

@@ -332,7 +332,12 @@ async def test_run_preview_passes_on_status(monkeypatch):
 
     with patch("handlers.digest.deliver_digest", fake_deliver):
         ctx = FakeContext()
-        ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+        # Active trial — the preview gate must pass for the normal first-touch
+        # flow (trial granted at /start, preview runs moments later).
+        ctx.user_data["user"] = {
+            "id": "uuid-1", "tg_user_id": USER,
+            "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
+        }
         upd = make_update()
         upd.effective_chat = type("C", (), {"id": USER})()
         await onb._run_preview(upd, ctx)
@@ -341,6 +346,67 @@ async def test_run_preview_passes_on_status(monkeypatch):
         "deliver_digest must receive an on_status callback from _run_preview"
     )
     assert callable(captured["on_status"])
+
+
+# ── preview gate: expired user never reaches the pipeline ─────────────────────
+
+@pytest.mark.asyncio
+async def test_preview_expired_user_blocked_no_llm(monkeypatch):
+    """An expired/unpaid user re-triggering the preview (stuck 'preview' state on
+    /start, replayed onb| inline button from old chat history, /reset_user re-run)
+    must hit the paywall — deliver_digest (the LLM pipeline) is never invoked,
+    and the user lands in 'done' so the wizard can't be looped for free digests."""
+    from unittest.mock import patch
+    import handlers.subscription as sub_module
+
+    async def _must_not_run(*a, **k):
+        raise AssertionError("deliver_digest invoked for an expired user (LLM spend leak)")
+
+    gate = AsyncMock()
+    upd_fields = AsyncMock()
+    monkeypatch.setattr(sub_module, "show_gate", gate)
+    monkeypatch.setattr(db_module, "update_user_fields", upd_fields)
+
+    with patch("handlers.digest.deliver_digest", _must_not_run):
+        ctx = FakeContext()
+        # Trial ended yesterday, no pro_until → inactive. Fail-closed also covers
+        # the null/missing-timestamps row (same falsy branch).
+        ctx.user_data["user"] = {
+            "id": "uuid-1", "tg_user_id": USER,
+            "trial_ends_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            "onboarding_state": "preview",
+        }
+        upd = make_update(callback_data="onb|focus_skip")
+        upd.effective_chat = SimpleNamespace(id=USER)
+        await onb._run_preview(upd, ctx)
+
+    gate.assert_awaited_once()
+    # The denied path still closes onboarding (channels are saved already).
+    assert upd_fields.await_args.args[1] == {"onboarding_state": onb.ST_DONE}
+
+
+@pytest.mark.asyncio
+async def test_preview_null_subscription_fails_closed(monkeypatch):
+    """A row with NO subscription timestamps at all (ambiguous state) must DENY
+    the preview — fail-closed is the contract for every LLM surface."""
+    from unittest.mock import patch
+    import handlers.subscription as sub_module
+
+    async def _must_not_run(*a, **k):
+        raise AssertionError("deliver_digest invoked with null subscription state")
+
+    gate = AsyncMock()
+    monkeypatch.setattr(sub_module, "show_gate", gate)
+    monkeypatch.setattr(db_module, "update_user_fields", AsyncMock())
+
+    with patch("handlers.digest.deliver_digest", _must_not_run):
+        ctx = FakeContext()
+        ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+        upd = make_update()
+        upd.effective_chat = SimpleNamespace(id=USER)
+        await onb._run_preview(upd, ctx)
+
+    gate.assert_awaited_once()
 
 
 # ── first /start grants trial + advances ──────────────────────────────────────

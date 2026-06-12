@@ -172,7 +172,19 @@ async def _cmd_in(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict
 
     async def _job(ctx: ContextTypes.DEFAULT_TYPE):
         try:
-            await digest_surface.deliver_digest(ctx.bot, user)
+            # Re-check the subscription AT FIRE TIME (fail-closed): the gate at
+            # schedule time is not enough — the trial can expire or the admin
+            # can /revoke_pro within the up-to-60-minute delay, and the captured
+            # `user` dict would be stale. Refetch the row; missing/inactive → no
+            # LLM spend, just a silent skip (the user already lost access).
+            row = await db.get_user_by_tg_id(tg_user_id)
+            if not row or not _effective_tier_active(row):
+                logger.info(
+                    "scheduled /in digest for %s skipped: subscription inactive at fire time",
+                    tg_user_id,
+                )
+                return
+            await digest_surface.deliver_digest(ctx.bot, row)
         except Exception as exc:
             logger.warning("scheduled /in digest for %s failed: %s", tg_user_id, exc)
 

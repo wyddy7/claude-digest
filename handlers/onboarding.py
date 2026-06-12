@@ -25,6 +25,7 @@ import db
 import delivery
 import subscriptions
 from handlers.menu import main_kb_saas
+from handlers.middleware import _effective_tier_active
 from handlers.strings import (
     ONBOARDING_CHANNELS_MIN_ERROR,
     ONBOARDING_FOCUS,
@@ -444,6 +445,24 @@ async def _run_preview(update, context):
     user = context.user_data["user"]
     chat = update.effective_chat
     tg_user_id = user["tg_user_id"]
+
+    # Subscription gate BEFORE any LLM spend (fail-closed). The preview is
+    # reachable outside the happy path: a /start resume on a stuck 'preview'
+    # state, a replayed onb| inline button from old chat history, or a
+    # /reset_user re-run after the trial expired. In the normal first-touch
+    # flow the trial was granted at /start, so this always passes; an
+    # expired/revoked/null-state user gets the paywall and NO pipeline run.
+    if not _effective_tier_active(user):
+        from handlers import subscription as subscription_surface
+
+        await subscription_surface.show_gate(update, context)
+        # Channels are already saved — land the user in 'done' so /start shows
+        # the menu (with the paywall), not a wizard/preview retry loop.
+        await db.update_user_fields(tg_user_id, {"onboarding_state": ST_DONE})
+        for k in ("onb_channels", "onb_topics", "onb_substate"):
+            context.user_data.pop(k, None)
+        return
+
     await context.bot.send_message(chat.id, PREVIEW_PRE)
     on_status = delivery.make_status_updater(context.bot, tg_user_id)
     try:
