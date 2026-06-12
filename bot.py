@@ -8,7 +8,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     Application,
@@ -66,6 +66,21 @@ async def _post_init(app: Application) -> None:
 
     from langgraph.checkpoint.memory import MemorySaver
     app.bot_data["checkpointer"] = MemorySaver()
+
+    # Publish the visible command menu (the "/" button in Telegram). Admin
+    # commands are intentionally omitted — they are not user-facing.
+    try:
+        await app.bot.set_my_commands([
+            BotCommand("menu", "Главное меню"),
+            BotCommand("help", "Справка по командам"),
+            BotCommand("next", "Когда следующий дайджест"),
+            BotCommand("in", "Дайджест через N минут"),
+            BotCommand("clear", "Очистить диалог с ассистентом"),
+            BotCommand("buy", "Оформить подписку"),
+        ])
+    except Exception as e:
+        logger.warning("set_my_commands failed (non-fatal): %s", e)
+
     logger.info("DB ready (supabase-py), checkpointer ready (MemorySaver)")
 
 

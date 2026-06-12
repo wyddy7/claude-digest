@@ -185,6 +185,12 @@ def create_chat_agent(system_prompt: str, checkpointer, user_id: str):
     )
 
 
+async def clear_chat_thread(checkpointer, tg_user_id: int) -> None:
+    """Wipe one user's conversational memory (the /clear command). The thread id
+    is the numeric tg id — the same key run_chat_turn uses for MemorySaver."""
+    await checkpointer.adelete_thread(str(tg_user_id))
+
+
 # ─── Status labels ────────────────────────────────────────────────────────────
 
 _CHAT_TOOL_LABELS = {

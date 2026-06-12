@@ -581,3 +581,28 @@ async def test_apply_payment_quarter_grants_correct_days(fdb):
     expected_low = before + timedelta(days=93)
     expected_high = after + timedelta(days=93)
     assert expected_low <= pro_until <= expected_high
+
+
+@pytest.mark.asyncio
+async def test_buy_text_renders_html_strike_and_discount(monkeypatch):
+    """Paywall anchors render as HTML <s> (the message is HTML — Markdown ~~ would
+    show literal tildes) and the discount line appears; charged prices unchanged."""
+    import handlers.subscription as sub
+
+    vals = {
+        ("pro", "price_month_stars"): 900,
+        ("pro", "price_quarter_stars"): 2400,
+        ("pro", "price_anchor_month_stars"): 1170,
+        ("pro", "price_anchor_quarter_stars"): 3120,
+    }
+
+    async def _gtd(tier, key, default=None):
+        return vals.get((tier, key), default)
+
+    monkeypatch.setattr(db_module, "get_tier_default", _gtd)
+    text = await sub._buy_text()
+
+    assert "<s>1170</s>" in text and "<s>3120</s>" in text
+    assert "~~" not in text                      # no Markdown strike in an HTML message
+    assert "Скидка" in text or "скидк" in text.lower()
+    assert "900" in text and "2400" in text      # charged prices intact

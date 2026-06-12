@@ -28,7 +28,7 @@ from bot import (
     CHECKIN_HOUR as _CHECKIN_HOUR,
     CHECKIN_MINUTE as _CHECKIN_MINUTE,
 )
-from agent import run_chat_turn
+from agent import run_chat_turn, clear_chat_thread
 from handlers.middleware import _effective_tier_active
 from handlers import digest as digest_surface
 from handlers import history as history_surface
@@ -43,6 +43,7 @@ from handlers.strings import (
     BTN_PROFILE,
     BTN_SETTINGS,
     BTN_SUBSCRIPTION,
+    CHAT_CLEARED,
     CHAT_ERROR,
     CHAT_LIMIT_HIT,
     CHAT_THINKING,
@@ -88,7 +89,8 @@ async def _cmd_help(update: Update) -> None:
         "*Команды*\n\n"
         "/help — это сообщение\n"
         "/next — когда следующий дайджест и чекин\n"
-        "/in `<минуты>` — запустить дайджест через N минут (1–60)\n\n"
+        "/in `<минуты>` — запустить дайджест через N минут (1–60)\n"
+        "/clear — очистить историю диалога с ассистентом\n\n"
         "*Кнопки*\n\n"
         "📰 *Дайджест* — запустить сейчас\n"
         "📚 *История* — предыдущие дайджесты\n"
@@ -100,6 +102,19 @@ async def _cmd_help(update: Update) -> None:
         f"• {_CHECKIN_HOUR:02d}:{_CHECKIN_MINUTE:02d} МСК — чекин",
         parse_mode="Markdown",
     )
+
+
+async def _cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/clear — wipe the caller's chat-with-digest conversation memory so the next
+    message starts a fresh thread. Free (no LLM, no subscription gate)."""
+    tg_user_id = update.effective_user.id if update.effective_user else None
+    checkpointer = context.application.bot_data.get("checkpointer")
+    if checkpointer is not None and tg_user_id is not None:
+        try:
+            await clear_chat_thread(checkpointer, tg_user_id)
+        except Exception as e:
+            logger.warning("/clear failed for %s: %s", tg_user_id, e)
+    await update.message.reply_text(CHAT_CLEARED)
 
 
 async def _cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
@@ -207,6 +222,9 @@ async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if text in ("/help", "/help@DigestBot"):
         await _cmd_help(update)
+        return
+    if text in ("/clear", "/clear@DigestBot"):
+        await _cmd_clear(update, context)
         return
     if text.startswith("/stages") and user:
         await _cmd_stages(update, context, user)

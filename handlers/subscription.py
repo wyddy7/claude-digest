@@ -25,6 +25,7 @@ import db
 import subscriptions
 from handlers.strings import (
     SUB_BUY_BODY_HEADER,
+    SUB_BUY_DISCOUNT,
     SUB_BUY_WALLET_TIP,
     SUB_GATE_EXPIRED,
     SUB_PAYMENT_DUPLICATE,
@@ -61,14 +62,18 @@ async def _buy_text() -> str:
     price_quarter = await db.get_tier_default("pro", "price_quarter_stars", "—")
     anchor_month = await db.get_tier_default("pro", "price_anchor_month_stars", None)
     anchor_quarter = await db.get_tier_default("pro", "price_anchor_quarter_stars", None)
-    month_line = f"▸ Месяц — {price_month}⭐"
+    # HTML strikethrough (<s>) — the buy message is sent with parse_mode="HTML",
+    # so Markdown ~~...~~ would render as literal tildes.
+    month_line = f"▸ Месяц — <b>{price_month}</b>⭐"
     if anchor_month:
-        month_line += f"  (~~{anchor_month}~~)"
-    quarter_line = f"▸ Квартал — {price_quarter}⭐  (выгоднее)"
+        month_line += f"  <s>{anchor_month}</s>"
+    quarter_line = f"▸ Квартал — <b>{price_quarter}</b>⭐  (выгоднее)"
     if anchor_quarter:
-        quarter_line += f"  (~~{anchor_quarter}~~)"
+        quarter_line += f"  <s>{anchor_quarter}</s>"
+    discount = SUB_BUY_DISCOUNT if (anchor_month or anchor_quarter) else ""
     return (
         SUB_BUY_BODY_HEADER
+        + discount
         + f"{month_line}\n"
         + f"{quarter_line}\n\n"
         + SUB_BUY_WALLET_TIP
