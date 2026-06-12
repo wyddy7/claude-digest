@@ -9,128 +9,93 @@ import logging
 import os
 import signal
 
-import httpx
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.helpers import escape_markdown
+from telegram import Bot
 
 import db
-from agent import run_digest_pipeline
+import subscriptions
 from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
-from personalization import load_personalization
-from pipeline_config import build_pipeline_config, make_openrouter_client
+from logging_setup import setup_logging
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+setup_logging("scheduler")
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 MOSCOW = pytz.timezone("Europe/Moscow")
 
 
-async def run_digest():
-    logger.info("Scheduled digest starting")
+async def _deliver_user_digest(bot, user: dict) -> int:
+    """Generate + deliver one user's digest. Delegates to the single shared
+    generator (handlers.digest.deliver_digest) so the cron fan-out, the 📰
+    button, and the onboarding preview all run the exact same per-user path —
+    no duplicated config-build/send/save logic."""
+    from handlers.digest import deliver_digest
+
+    return await deliver_digest(bot, user)
+
+
+async def run_digest_fanout():
+    """Multi-tenant fan-out tick: iterate active users, gate each on subscription
+    state, deliver per-user. The owner is a normal users row (seeded by
+    db.ensure_owner_user), so the fan-out always covers them.
+
+    Per-user errors are isolated (one user's failure never blocks others);
+    expiry-warning + delivery gating are wired."""
+    users = await db.list_active_users()
+    if not users:
+        logger.info("Fan-out: no active users — nothing to deliver")
+        return
+
+    logger.info(f"Fan-out: {len(users)} active user(s)")
     async with Bot(BOT_TOKEN) as bot:
-        status_msg = None
-
-        async def _on_status(text: str):
-            nonlocal status_msg
+        for user in users:
+            tg_user_id = user["tg_user_id"]
+            user_id = user["id"]
             try:
-                if status_msg is None:
-                    status_msg = await bot.send_message(CHAT_ID, text)
-                else:
-                    await status_msg.edit_text(text)
+                if not await subscriptions.is_subscription_active(tg_user_id):
+                    # Inactive: optionally warn near expiry, then skip delivery.
+                    await subscriptions.maybe_warn_expiry(tg_user_id, bot)
+                    continue
+
+                # N6: enforce digests_per_day on the CRON path only.
+                # Manual 📰 requests are always lenient (on-demand, user-initiated).
+                daily_cap = await db.get_effective_limit(user_id, "digests_per_day", None)
+                if daily_cap is not None:
+                    try:
+                        daily_cap = int(daily_cap)
+                    except (TypeError, ValueError):
+                        daily_cap = None
+                if daily_cap is not None and daily_cap >= 0:
+                    already_sent = await db.count_user_digests_today(user_id)
+                    if already_sent >= daily_cap:
+                        logger.info(
+                            "Fan-out: skipping %s — digests_per_day cap %d reached (%d sent today)",
+                            tg_user_id, daily_cap, already_sent,
+                        )
+                        continue
+
+                posts_count = await _deliver_user_digest(bot, user)
+                logger.info(f"Fan-out: delivered to {tg_user_id} ({posts_count} posts)")
             except Exception as e:
-                logger.warning(f"scheduler: status update failed: {e}")
-
-        cfg_data = await db.load()
-        cfg_yaml = load_personalization()
-        config = build_pipeline_config(cfg_data, cfg_yaml)
-        llm_client = make_openrouter_client(OPENROUTER_KEY)
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
-            result = await run_digest_pipeline(
-                config, llm_client=llm_client, fetcher=fetcher, on_status=_on_status
-            )
-
-        digest_html = result["digest_html"]
-        personal_html = result.get("personal_html", "")
-        stats_html = result.get("stats_html", "")
-        posts_count = result.get("posts_count", 0)
-
-        if status_msg:
-            try:
-                await status_msg.edit_text("✅ Готово")
-            except Exception:
-                pass
-
-        # Save to user_state
-        data = await db.load()
-        if data.get("focus_auto_reset") and data.get("current_focus"):
-            data["current_focus"] = ""
-        data["last_digest"] = digest_html
-        import datetime
-        data["last_digest_time"] = datetime.datetime.now().isoformat()
-        await db.save(data)
-        await db.add_history(f"Дайджест ({posts_count} постов)")
-
-        from datetime import datetime as dt
-        date_str = dt.now(MOSCOW).strftime("%d.%m.%Y")
-        full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
-
-        max_len = 4096
-        chunks = []
-        if len(full_text) <= max_len:
-            chunks = [full_text]
-        else:
-            paragraphs = full_text.split("\n\n")
-            current = ""
-            for para in paragraphs:
-                if len(current) + len(para) + 2 <= max_len:
-                    current = current + ("\n\n" if current else "") + para
-                else:
-                    if current:
-                        chunks.append(current)
-                    while len(para) > max_len:
-                        chunks.append(para[:max_len])
-                        para = para[max_len:]
-                    current = para
-            if current:
-                chunks.append(current)
-
-        for chunk in chunks:
-            await bot.send_message(CHAT_ID, chunk, parse_mode="HTML", disable_web_page_preview=True)
-
-        personal_parts = [p for p in [personal_html, stats_html] if p]
-        if personal_parts:
-            await bot.send_message(
-                CHAT_ID, "\n\n".join(personal_parts),
-                parse_mode="HTML", disable_web_page_preview=True,
-            )
-
-    logger.info(f"Scheduled digest done: {posts_count} posts")
+                logger.warning(f"Fan-out: user {tg_user_id} failed (isolated): {e}")
 
 
 async def run_checkin():
-    data = await db.load()
-    focus = data.get("current_focus", "")
-    focus_line = f" Как дела с *{escape_markdown(focus, version=1)}*?" if focus else ""
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Прочитал", callback_data="ci_yes"),
-        InlineKeyboardButton("❌ Не успел", callback_data="ci_no"),
-        InlineKeyboardButton("💬 Поговорить", callback_data="ci_talk"),
-    ]])
-    async with Bot(BOT_TOKEN) as bot:
-        await bot.send_message(
-            CHAT_ID,
-            f"Эй, успел глянуть дайджест?{focus_line}",
-            reply_markup=kb,
-            parse_mode="Markdown",
-        )
-    logger.info("Scheduled checkin sent")
+    """Multi-tenant check-in fan-out.
+
+    Delegates to handlers.checkin.run_checkin_fanout which iterates active users,
+    gates each on subscriptions.is_subscription_active, reads per-user focus from
+    user_settings, and delivers the check-in to their tg_user_id. The owner is a
+    normal users row, so the fan-out covers them too.
+    """
+    from handlers.checkin import run_checkin_fanout
+
+    await run_checkin_fanout(BOT_TOKEN)
+    logger.info("Scheduled checkin fan-out complete")
 
 
 async def _run():
@@ -141,10 +106,12 @@ async def _run():
         return
 
     await db.init_supabase(url, key)
+    await db.ensure_owner_user()
     logger.info("DB ready (supabase-py)")
 
     scheduler = AsyncIOScheduler(timezone=MOSCOW)
-    scheduler.add_job(run_digest, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")
+    # Multi-tenant fan-out tick — iterates every active users row (owner included).
+    scheduler.add_job(run_digest_fanout, "cron", hour=DIGEST_HOUR, minute=DIGEST_MINUTE, misfire_grace_time=300, name="daily_digest")
     scheduler.add_job(run_checkin, "cron", hour=CHECKIN_HOUR, minute=CHECKIN_MINUTE, misfire_grace_time=300, name="daily_checkin")
 
     stop_event = asyncio.Event()

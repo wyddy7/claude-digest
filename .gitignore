@@ -1,5 +1,8 @@
 .env
+.env.*
+*.bak
 .venv/
+logs/
 __pycache__/
 *.pyc
 config/personalization.yaml

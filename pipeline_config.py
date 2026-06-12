@@ -53,6 +53,13 @@ class PipelineConfig:
     dedup_enabled: bool = True
     dedup_window_days: int = 7
     tenant_id: Optional[str] = None  # reserved — SaaS seam, unused
+    # Per-user pipeline inputs. When `user_data` is set the pipeline runs in
+    # multi-tenant mode: it sources channels + profile + recent digests from
+    # THIS config (the caller's user), never the legacy global db.load() row.
+    # Left empty by legacy/test callers, which keep the db_module.load() path.
+    channels: list = field(default_factory=list)
+    user_data: dict = field(default_factory=dict)
+    recent_digests: list = field(default_factory=list)
 
 
 def stage_from_yaml(
@@ -139,17 +146,28 @@ def describe_registry(registry: ModelRegistry) -> str:
 
 
 def build_pipeline_config(
-    user_data: dict, cfg_yaml: dict, read_mode: str | None = None
+    user_data: dict, cfg_yaml: dict, read_mode: str | None = None,
+    recent_digests: list | None = None,
 ) -> PipelineConfig:
     """Build the pipeline config. read_mode resolution order:
     explicit arg > `read_mode:` in personalization.yaml > off (default).
     This is the runtime switch for the reader layer — flip it in the yaml to
-    turn on extract-mode without a code change or redeploy."""
+    turn on extract-mode without a code change or redeploy.
+
+    `user_data` carries the caller's channels + profile + focus + interaction
+    history; they are stored on the config so the pipeline reads THIS user's
+    inputs (multi-tenant) instead of the legacy global db.load() row. Pass
+    `recent_digests` (the user's last few digest rows) for de-duplication
+    context — scope it per user (db.load_user_history)."""
     if read_mode is None:
         read_mode = (cfg_yaml or {}).get("read_mode", READ_MODE_OFF)
+    user_data = user_data or {}
     return PipelineConfig(
         read_mode=read_mode,
         models=build_registry_from_state(user_data, cfg_yaml),
+        channels=list(user_data.get("channels") or []),
+        user_data=dict(user_data),
+        recent_digests=list(recent_digests or []),
     )
 
 
