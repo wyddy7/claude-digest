@@ -18,6 +18,7 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -31,6 +32,14 @@ from handlers.strings import CHAT_LIMIT_HIT
 USER_A = "uuid-user-a"
 USER_B = "uuid-user-b"
 TG_USER_A = 444444444
+
+
+def _active_user() -> dict:
+    """A user row with an active subscription (passes the chat gate)."""
+    return {
+        "id": USER_A, "tg_user_id": TG_USER_A,
+        "pro_until": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+    }
 
 
 # ── fakes ─────────────────────────────────────────────────────────────────────
@@ -162,7 +171,7 @@ async def test_chat_routes_with_per_user_thread_and_scope(monkeypatch):
         db_module, "record_chat_turn", AsyncMock(side_effect=lambda uid: recorded.append(uid))
     )
 
-    user = {"id": USER_A, "tg_user_id": TG_USER_A}
+    user = _active_user()
     upd = make_update("что было про wispr?")
     ctx = FakeContext(user)
     await chat_mod._chat_with_digest(upd, ctx, user)
@@ -191,7 +200,7 @@ async def test_chat_over_limit_blocks_agent(monkeypatch):
     monkeypatch.setattr(db_module, "count_chat_turns_this_month", AsyncMock(return_value=50))
     monkeypatch.setattr(db_module, "record_chat_turn", AsyncMock())
 
-    user = {"id": USER_A, "tg_user_id": TG_USER_A}
+    user = _active_user()
     upd = make_update("ещё вопрос")
     ctx = FakeContext(user)
     await chat_mod._chat_with_digest(upd, ctx, user)
@@ -201,3 +210,28 @@ async def test_chat_over_limit_blocks_agent(monkeypatch):
     assert text == CHAT_LIMIT_HIT.format(cap=50)
     # record_chat_turn must NOT be called when the gate blocks.
     db_module.record_chat_turn.assert_not_called()
+
+
+# ── subscription gate: expired user can't reach the LLM ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_chat_expired_user_hits_paywall_not_agent(monkeypatch):
+    """An expired/unpaid user typing free text must hit the paywall, never the
+    chat agent (no LLM spend). This is the leak test2 caught — only 📰 was gated."""
+    async def _must_not_run(*a, **k):
+        raise AssertionError("run_chat_turn invoked for an expired user")
+
+    gate = AsyncMock()
+    monkeypatch.setattr(chat_mod, "run_chat_turn", _must_not_run)
+    monkeypatch.setattr(chat_mod.subscription_surface, "show_gate", gate)
+    # If the gate let it through, these would be hit — assert they are not.
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(side_effect=AssertionError))
+    monkeypatch.setattr(db_module, "count_chat_turns_this_month", AsyncMock(side_effect=AssertionError))
+
+    user = {"id": USER_A, "tg_user_id": TG_USER_A}  # no pro_until / trial_ends_at → expired
+    upd = make_update("дай дайджест за месяц")
+    ctx = FakeContext(user)
+    await chat_mod._chat_with_digest(upd, ctx, user)
+
+    gate.assert_awaited_once()

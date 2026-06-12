@@ -29,6 +29,7 @@ from bot import (
     CHECKIN_MINUTE as _CHECKIN_MINUTE,
 )
 from agent import run_chat_turn
+from handlers.middleware import _effective_tier_active
 from handlers import digest as digest_surface
 from handlers import history as history_surface
 from handlers import onboarding as onboarding_surface
@@ -119,8 +120,21 @@ async def _cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE, user: 
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+async def _require_active(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> bool:
+    """Gate the LLM-spend surfaces (chat, /in) on an active trial/subscription.
+    Returns True if allowed; otherwise shows the paywall and returns False. The
+    📰 button is gated by @requires_tier — this is the same gate for the surfaces
+    that aren't decorated handlers, so an expired user can't burn tokens."""
+    if _effective_tier_active(user):
+        return True
+    await subscription_surface.show_gate(update, context)
+    return False
+
+
 async def _cmd_in(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
     """Tenant-safe /in <minutes>: schedules a per-user digest via job_queue."""
+    if not await _require_active(update, context, user):
+        return
     raw = (update.message.text or "").strip()
     parts = raw.split()
     args = parts[1:] if len(parts) > 1 else []
@@ -243,6 +257,10 @@ async def _chat_with_digest(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     user_id = user["id"]
     tg_user_id = user["tg_user_id"]
     text = (update.message.text or "").strip()
+
+    # Subscription gate FIRST — an expired/unpaid user must not reach the LLM.
+    if not await _require_active(update, context, user):
+        return
 
     # Quota gate — limit from DB, current usage from the per-user monthly counter.
     cap = await db.get_effective_limit(user_id, "chat_turns_per_month", _CHAT_TURNS_FALLBACK)
