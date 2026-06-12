@@ -143,3 +143,11 @@ SETTINGS_FOCUS_OK = "✅ Фокус: {focus}"
 
 SETTINGS_TOGGLE_AUTORESET_ON = "Авто-сброс фокуса: ВКЛ ✅"
 SETTINGS_TOGGLE_AUTORESET_OFF = "Авто-сброс фокуса: ВЫКЛ"
+
+# ── history surface ────────────────────────────────────────────────────────────
+HISTORY_EMPTY = (
+    "История пуста — запусти первый дайджест кнопкой 📰 Дайджест!"
+)
+HISTORY_HEADER_TEMPLATE = "📚 <b>История</b> ({count} дайджестов)"
+HISTORY_NOT_FOUND = "Запись не найдена."
+HISTORY_TRUNCATED_SUFFIX = "\n\n<i>(сокращено)</i>"

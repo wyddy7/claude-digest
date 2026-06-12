@@ -185,6 +185,40 @@ async def append_to_history(digest_html: str, posts_count: int) -> None:
     logger.debug("db.append_to_history done")
 
 
+async def append_user_digest(user_id: str, digest_html: str, posts_count: int) -> None:
+    """Insert a digest row scoped to a tenant (user_id FK). The user_id column
+    was added in migration 003; legacy rows without user_id are unaffected.
+    is_error is derived from the digest body prefix to mirror the legacy path."""
+    import pytz
+    moscow = pytz.timezone("Europe/Moscow")
+    now_msk = datetime.now(moscow)
+    is_error = digest_html.startswith("Ошибка") or digest_html.startswith("Не нашёл")
+    await _get_client().table("digests").insert({
+        "user_id": user_id,
+        "date": now_msk.strftime("%Y-%m-%d"),
+        "digest_html": digest_html,
+        "posts_count": posts_count,
+        "is_error": is_error,
+    }).execute()
+    logger.debug("db.append_user_digest done (user_id=%s)", user_id)
+
+
+async def load_user_history(user_id: str, limit: int = 0) -> list[dict]:
+    """Load digest history for a single tenant (user_id), newest first.
+    limit=0 means all rows. Filtered by user_id so tenants never see each
+    other's digests. Uses the idx_digests_user_id_id index from migration 003."""
+    q = (
+        _get_client().table("digests")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("id", desc=True)
+    )
+    if limit:
+        q = q.limit(limit)
+    resp = await q.execute()
+    return resp.data or []
+
+
 # ─── link_cache (reader dedup) ────────────────────────────────────────────────
 
 def _url_hash(url: str) -> str:

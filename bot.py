@@ -603,6 +603,9 @@ def main():
     app.add_handler(CallbackQueryHandler(subscription_surface.cb_buy, pattern=r"^buy\|"))
     app.add_handler(CallbackQueryHandler(settings_surface.cb, pattern=r"^s\|"))
 
+    from handlers import history as history_surface
+    app.add_handler(CallbackQueryHandler(history_surface.cb, pattern=r"^h\|"))
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))

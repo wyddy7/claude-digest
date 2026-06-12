@@ -73,6 +73,13 @@ async def deliver_digest(bot, user: dict, *, on_status=None) -> int:
         result.get("personal_html", ""), result.get("stats_html", ""),
     )
 
+    # Record per-user digest history row (tenant-scoped, filtered by user_id).
+    try:
+        await db.append_user_digest(user_id, digest_html, posts_count)
+    except Exception as exc:
+        # History write is best-effort — never abort delivery on a ledger failure.
+        logger.warning("append_user_digest failed (non-fatal): %s", exc)
+
     saved = {
         "last_digest": digest_html,
         "last_digest_time": dt.now().isoformat(),

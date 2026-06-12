@@ -1,9 +1,9 @@
 """Non-owner text router.
 
 Dispatches the 6-button reply keyboard to its surface and owns the onboarding
-free-text escape hatches. ⚙️ Настройки and 🎯 Фокус are now wired to
-handlers.settings; 📚 История still answers with a coming-soon placeholder.
-The owner's rich single-tenant router in bot.py is untouched.
+free-text escape hatches. ⚙️ Настройки and 🎯 Фокус are wired to
+handlers.settings; 📚 История is wired to handlers.history (paginated,
+tenant-scoped). The owner's rich single-tenant router in bot.py is untouched.
 """
 
 import logging
@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 
 import db
 from handlers import digest as digest_surface
+from handlers import history as history_surface
 from handlers import onboarding as onboarding_surface
 from handlers import profile as profile_surface
 from handlers import settings as settings_surface
@@ -25,7 +26,6 @@ from handlers.strings import (
     BTN_SETTINGS,
     BTN_SUBSCRIPTION,
     FALLBACK,
-    SOON,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await settings_surface.show_focus_prompt(update, context)
         return
     if text == BTN_HISTORY:
-        await update.message.reply_text(SOON)
+        await history_surface.show_history(update, context)
         return
 
     # 5) Fallback — re-show the menu so the user is never stuck.

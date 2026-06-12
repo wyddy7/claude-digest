@@ -37,10 +37,18 @@ async def show_profile(update, context):
         plan = "🔒 Истёк"
 
     history_label = "без лимита" if str(history_days) in ("0", "0.0") else f"{history_days} дн."
+
+    # Build the channel list: show names, not only the count.
+    if channels:
+        ch_lines = "\n".join(f"  • @{escape(ch)}" for ch in channels)
+        channels_block = f"Каналов: {len(channels)}/{channel_cap}\n{ch_lines}"
+    else:
+        channels_block = f"Каналов: 0/{channel_cap} (добавь в ⚙️ Настройки)"
+
     body = (
         "👤 <b>Профиль</b>\n\n"
         f"План: {escape(plan)}\n"
-        f"Каналов: {len(channels)}/{channel_cap}\n"
+        f"{channels_block}\n"
         f"Модель дайджеста: <code>{escape(str(model))}</code>\n"
         f"Фокус: {escape(focus) if focus else '«по значимости»'}\n"
         f"История: {history_label}"
