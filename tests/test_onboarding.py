@@ -231,6 +231,105 @@ async def test_ingest_channels_validates_and_caps(monkeypatch):
     assert len(cand) <= 3  # capped
 
 
+# ── N4: lenient @username parse ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ingest_channels_strips_at_sign(monkeypatch):
+    """Leading @ is stripped so @mychannel and mychannel are accepted identically."""
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=10))
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    upd = make_update(text="@first_chan second_chan")
+    await onb._ingest_channels(upd, ctx)
+    cand = ctx.user_data["onb_channels"]
+    assert "first_chan" in cand   # @ was stripped
+    assert "second_chan" in cand
+
+
+@pytest.mark.asyncio
+async def test_ingest_channels_newline_separated(monkeypatch):
+    """Newline-separated input is accepted (same as space-separated)."""
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=10))
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    upd = make_update(text="chan_alpha\nchan_beta\nchan_gamma")
+    await onb._ingest_channels(upd, ctx)
+    cand = ctx.user_data["onb_channels"]
+    assert "chan_alpha" in cand
+    assert "chan_beta" in cand
+    assert "chan_gamma" in cand
+
+
+@pytest.mark.asyncio
+async def test_ingest_channels_deduplicates(monkeypatch):
+    """A duplicate username (with or without @) is added only once."""
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=10))
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    upd = make_update(text="my_channel @my_channel my_channel")
+    await onb._ingest_channels(upd, ctx)
+    cand = ctx.user_data["onb_channels"]
+    assert cand.count("my_channel") == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_channels_ignores_empty_tokens(monkeypatch):
+    """Empty tokens (multiple spaces, leading/trailing whitespace) are silently ignored."""
+    monkeypatch.setattr(db_module, "get_effective_limit", AsyncMock(return_value=10))
+    ctx = FakeContext()
+    ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+    # Extra spaces and a lone @ produce empty tokens after stripping.
+    upd = make_update(text="  valid_chan   @   another_val  ")
+    await onb._ingest_channels(upd, ctx)
+    cand = ctx.user_data["onb_channels"]
+    assert "valid_chan" in cand
+    assert "another_val" in cand
+    # Empty string must never appear in candidates.
+    assert "" not in cand
+
+
+# ── N3: only curated AI/LLM topic surfaced in onboarding ──────────────────────
+
+def test_only_ai_topic_in_labels():
+    """_TOPIC_LABELS must contain exactly the curated AI/LLM key(s) — no unverified
+    topic templates (dev, crypto, startup, science, business) surfaced in onboarding."""
+    assert "ai" in onb._TOPIC_LABELS
+    for unverified in ("dev", "crypto", "startup", "science", "business"):
+        assert unverified not in onb._TOPIC_LABELS, (
+            f"unverified topic '{unverified}' must not appear in _TOPIC_LABELS"
+        )
+
+
+# ── N2: preview passes on_status to deliver_digest ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_run_preview_passes_on_status(monkeypatch):
+    """_run_preview must pass an on_status callback to deliver_digest so that
+    pipeline stage updates stream to the user (parity with the 📰 button)."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    monkeypatch.setattr(db_module, "load_settings", AsyncMock(return_value={"current_focus": ""}))
+    monkeypatch.setattr(db_module, "update_user_fields", AsyncMock())
+
+    captured = {}
+
+    async def fake_deliver(bot, user, *, on_status=None):
+        captured["on_status"] = on_status
+        return 3  # posts_count
+
+    with patch("handlers.digest.deliver_digest", fake_deliver):
+        ctx = FakeContext()
+        ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
+        upd = make_update()
+        upd.effective_chat = type("C", (), {"id": USER})()
+        await onb._run_preview(upd, ctx)
+
+    assert captured.get("on_status") is not None, (
+        "deliver_digest must receive an on_status callback from _run_preview"
+    )
+    assert callable(captured["on_status"])
+
+
 # ── first /start grants trial + advances ──────────────────────────────────────
 
 @pytest.mark.asyncio

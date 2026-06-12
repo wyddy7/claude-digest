@@ -22,6 +22,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 import db
+import delivery
 import subscriptions
 from handlers.menu import main_kb_saas
 from handlers.strings import (
@@ -55,12 +56,10 @@ _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
 _TOPICS_PATH = Path(__file__).resolve().parent.parent / "config" / "onboarding_topics.yaml"
 
 _TOPIC_LABELS = {
+    # N3: only the curated, owner-verified AI/LLM set is offered.
+    # Other topic templates remain in the YAML for future curation, but are
+    # not surfaced in onboarding until they are verified by the owner.
     "ai": "🤖 AI и LLM",
-    "dev": "💻 Разработка / Tech",
-    "crypto": "🪙 Крипта / Web3",
-    "startup": "📈 Стартапы / Продукт",
-    "science": "🔬 Наука / Ресёрч",
-    "business": "💼 Бизнес / Экономика",
 }
 
 
@@ -427,14 +426,19 @@ PREVIEW_FAIL = ONBOARDING_PREVIEW_FAIL
 async def _run_preview(update, context):
     """Generate the first digest now, then close onboarding. Always lands the user
     in 'done' (channels are saved) — a transient generation failure does not trap
-    them in the wizard."""
+    them in the wizard.
+
+    N2: streams pipeline stage updates via make_status_updater, matching
+    the live behaviour of the 📰 button (deliver_digest's on_status path)."""
     from handlers.digest import deliver_digest
 
     user = context.user_data["user"]
     chat = update.effective_chat
+    tg_user_id = user["tg_user_id"]
     await context.bot.send_message(chat.id, PREVIEW_PRE)
+    on_status = delivery.make_status_updater(context.bot, tg_user_id)
     try:
-        await deliver_digest(context.bot, user)
+        await deliver_digest(context.bot, user, on_status=on_status)
         await context.bot.send_message(
             chat.id, PREVIEW_CLOSE, reply_markup=main_kb_saas(
                 (await db.load_settings(user["id"])).get("current_focus") or ""
