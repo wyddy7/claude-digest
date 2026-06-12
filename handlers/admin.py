@@ -36,12 +36,15 @@ logger = logging.getLogger(__name__)
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 
+def is_admin_id(tg_user_id) -> bool:
+    """True iff the given Telegram id is the configured admin (ADMIN_ID env).
+    Unset ADMIN_ID (0) → nobody is admin (fail-closed). Shared so other surfaces
+    (e.g. the admin-only /in) gate the same way without duplicating the check."""
+    return bool(ADMIN_ID) and str(tg_user_id) == str(ADMIN_ID)
+
+
 def _is_admin(update: Update) -> bool:
-    return bool(
-        ADMIN_ID
-        and update.effective_user
-        and update.effective_user.id == ADMIN_ID
-    )
+    return bool(update.effective_user) and is_admin_id(update.effective_user.id)
 
 
 async def cmd_give_pro(update: Update, context: ContextTypes.DEFAULT_TYPE):

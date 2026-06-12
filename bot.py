@@ -74,7 +74,6 @@ async def _post_init(app: Application) -> None:
             BotCommand("menu", "Главное меню"),
             BotCommand("help", "Справка по командам"),
             BotCommand("next", "Когда следующий дайджест"),
-            BotCommand("in", "Дайджест через N минут"),
             BotCommand("clear", "Очистить диалог с ассистентом"),
             BotCommand("buy", "Оформить подписку"),
         ])

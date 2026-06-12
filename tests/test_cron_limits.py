@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -305,3 +306,105 @@ async def test_fanout_delivers_when_no_cap_set():
             await sched_module.run_digest_fanout()
 
     assert len(delivered) == 1, "Expected delivery when no cap is configured"
+
+
+# ─── manual 📰 digests_per_day gate (parity with cron) ───────────────────────
+
+from datetime import timedelta  # noqa: E402
+
+
+class _FakeMsg:
+    def __init__(self):
+        self.replies: list = []
+
+    async def reply_text(self, text, **kw):
+        self.replies.append(text)
+        return self
+
+    async def edit_text(self, text, **kw):
+        return self
+
+
+class _FakeUpdate:
+    def __init__(self):
+        self.effective_message = _FakeMsg()
+
+
+def _active_ctx(user: dict):
+    return SimpleNamespace(user_data={"user": user}, bot=object())
+
+
+def _active_user(**kw) -> dict:
+    row = {
+        "id": _USER_ID,
+        "tg_user_id": _USER_TG_ID,
+        "pro_until": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+    }
+    row.update(kw)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_manual_digest_capped_for_active_user(monkeypatch):
+    """An active (non-owner) user pressing 📰 after hitting digests_per_day gets the
+    cap message and the pipeline never runs (no LLM spend)."""
+    from handlers import digest as digest_mod
+
+    delivered: list = []
+
+    async def _deliver(*a, **kw):
+        delivered.append(1)
+
+    monkeypatch.setattr(digest_mod, "is_owner", lambda _id: False)
+    monkeypatch.setattr(digest_mod, "deliver_digest", _deliver)
+    monkeypatch.setattr(digest_mod.db, "get_effective_limit", AsyncMock(return_value=1))
+    monkeypatch.setattr(digest_mod.db, "count_user_digests_today", AsyncMock(return_value=1))
+
+    upd, ctx = _FakeUpdate(), _active_ctx(_active_user())
+    await digest_mod.send_digest(upd, ctx)
+
+    assert delivered == [], "pipeline must NOT run when the daily cap is reached"
+    from handlers.strings import DIGEST_DAILY_CAP
+    assert upd.effective_message.replies == [DIGEST_DAILY_CAP]
+
+
+@pytest.mark.asyncio
+async def test_manual_digest_owner_exempt_from_cap(monkeypatch):
+    """The owner is exempt from the manual cap — testing isn't blocked even at cap."""
+    from handlers import digest as digest_mod
+
+    delivered: list = []
+
+    async def _deliver(*a, **kw):
+        delivered.append(1)
+
+    monkeypatch.setattr(digest_mod, "is_owner", lambda _id: True)
+    monkeypatch.setattr(digest_mod, "deliver_digest", _deliver)
+    monkeypatch.setattr(digest_mod.db, "get_effective_limit", AsyncMock(return_value=1))
+    monkeypatch.setattr(digest_mod.db, "count_user_digests_today", AsyncMock(return_value=99))
+
+    upd, ctx = _FakeUpdate(), _active_ctx(_active_user())
+    await digest_mod.send_digest(upd, ctx)
+
+    assert delivered == [1], "owner must be delivered even above the cap"
+
+
+@pytest.mark.asyncio
+async def test_manual_digest_delivers_under_cap(monkeypatch):
+    """Under the daily cap, a normal active user's 📰 runs the pipeline."""
+    from handlers import digest as digest_mod
+
+    delivered: list = []
+
+    async def _deliver(*a, **kw):
+        delivered.append(1)
+
+    monkeypatch.setattr(digest_mod, "is_owner", lambda _id: False)
+    monkeypatch.setattr(digest_mod, "deliver_digest", _deliver)
+    monkeypatch.setattr(digest_mod.db, "get_effective_limit", AsyncMock(return_value=1))
+    monkeypatch.setattr(digest_mod.db, "count_user_digests_today", AsyncMock(return_value=0))
+
+    upd, ctx = _FakeUpdate(), _active_ctx(_active_user())
+    await digest_mod.send_digest(upd, ctx)
+
+    assert delivered == [1], "under cap, the digest pipeline should run"

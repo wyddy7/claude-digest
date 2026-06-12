@@ -30,6 +30,7 @@ from bot import (
 )
 from agent import run_chat_turn, clear_chat_thread
 from handlers.middleware import _effective_tier_active
+from handlers import admin as admin_surface
 from handlers import digest as digest_surface
 from handlers import history as history_surface
 from handlers import onboarding as onboarding_surface
@@ -48,6 +49,7 @@ from handlers.strings import (
     CHAT_LIMIT_HIT,
     CHAT_THINKING,
     FALLBACK,
+    IN_ADMIN_ONLY,
     ONBOARDING_MENU_READY as MENU_READY,
 )
 
@@ -89,7 +91,6 @@ async def _cmd_help(update: Update) -> None:
         "*Команды*\n\n"
         "/help — это сообщение\n"
         "/next — когда следующий дайджест и чекин\n"
-        "/in `<минуты>` — запустить дайджест через N минут (1–60)\n"
         "/clear — очистить историю диалога с ассистентом\n\n"
         "*Кнопки*\n\n"
         "📰 *Дайджест* — запустить сейчас\n"
@@ -151,7 +152,12 @@ async def _require_active(update: Update, context: ContextTypes.DEFAULT_TYPE, us
 
 
 async def _cmd_in(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
-    """Tenant-safe /in <minutes>: schedules a per-user digest via job_queue."""
+    """/in <minutes>: schedule a one-off digest. ADMIN-ONLY — it's an unbounded
+    manual-spend power tool, so it's gated to the operator (ADMIN_ID), kept out
+    of the user /help and the command menu, and never offered to tenants."""
+    if not admin_surface.is_admin_id(user.get("tg_user_id")):
+        await update.message.reply_text(IN_ADMIN_ONLY)
+        return
     if not await _require_active(update, context, user):
         return
     raw = (update.message.text or "").strip()
