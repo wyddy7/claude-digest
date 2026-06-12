@@ -160,3 +160,15 @@ HISTORY_EMPTY = (
 HISTORY_HEADER_TEMPLATE = "📚 <b>История</b> ({count} дайджестов)"
 HISTORY_NOT_FOUND = "Запись не найдена."
 HISTORY_TRUNCATED_SUFFIX = "\n\n<i>(сокращено)</i>"
+
+# ── check-in surface ───────────────────────────────────────────────────────────
+CHECKIN_QUESTION = "Эй, успел глянуть дайджест?"
+CHECKIN_FOCUS_SUFFIX = " Как дела с *{focus}*?"
+CHECKIN_BTN_YES = "✅ Прочитал"
+CHECKIN_BTN_NO = "❌ Не успел"
+CHECKIN_BTN_TALK = "💬 Поговорить"
+CHECKIN_YES_ANSWER = "Огонь! 🔥"
+CHECKIN_YES_BODY = "Огонь! 🔥 Завтра в {hour:02d}:{minute:02d}."
+CHECKIN_NO_PREFIX = "Держи дайджест ещё раз:"
+CHECKIN_NO_EMPTY = "Дайджест ещё не запускался."
+CHECKIN_TALK_PROMPT = "Пиши, слушаю 👇"

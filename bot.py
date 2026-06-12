@@ -620,7 +620,8 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_back_settings, pattern="^back_settings$"))
     app.add_handler(CallbackQueryHandler(cb_hp, pattern=r"^hp\|"))
     app.add_handler(CallbackQueryHandler(cb_hv, pattern=r"^hv\|"))
-    app.add_handler(CallbackQueryHandler(cb_checkin, pattern=r"^ci_"))
+    from handlers.checkin import cb_checkin as checkin_cb
+    app.add_handler(CallbackQueryHandler(checkin_cb, pattern=r"^ci_"))
     app.add_handler(CallbackQueryHandler(cb_toggle_autoreset, pattern="^toggle_autoreset$"))
     app.add_handler(CallbackQueryHandler(cb_edit_profile, pattern="^edit_profile$"))
 

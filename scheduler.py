@@ -13,8 +13,7 @@ import httpx
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.helpers import escape_markdown
+from telegram import Bot
 
 import db
 import subscriptions
@@ -188,22 +187,31 @@ async def run_digest_fanout():
 
 
 async def run_checkin():
-    data = await db.load()
-    focus = data.get("current_focus", "")
-    focus_line = f" Как дела с *{escape_markdown(focus, version=1)}*?" if focus else ""
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Прочитал", callback_data="ci_yes"),
-        InlineKeyboardButton("❌ Не успел", callback_data="ci_no"),
-        InlineKeyboardButton("💬 Поговорить", callback_data="ci_talk"),
-    ]])
-    async with Bot(BOT_TOKEN) as bot:
-        await bot.send_message(
-            CHAT_ID,
-            f"Эй, успел глянуть дайджест?{focus_line}",
-            reply_markup=kb,
-            parse_mode="Markdown",
-        )
-    logger.info("Scheduled checkin sent")
+    """Multi-tenant check-in fan-out.
+
+    Delegates to handlers.checkin.run_checkin_fanout which iterates active users,
+    gates each on subscriptions.is_subscription_active, reads per-user focus from
+    user_settings, and delivers the check-in to their tg_user_id.
+
+    If no users rows exist in the DB (legacy single-tenant mode), falls back to
+    sending a check-in directly to CHAT_ID (legacy owner path) so the live bot is
+    unaffected before the multi-tenant table is populated.
+    """
+    from handlers.checkin import run_checkin_fanout, send_checkin
+
+    users = await db.list_active_users()
+    if not users:
+        # Legacy fallback: no users table yet — send to owner CHAT_ID.
+        logger.info("checkin: no users rows — legacy single-tenant path")
+        data = await db.load()
+        focus = data.get("current_focus", "")
+        async with Bot(BOT_TOKEN) as bot:
+            await send_checkin(bot, CHAT_ID, focus)
+        logger.info("Scheduled checkin sent (legacy path)")
+        return
+
+    await run_checkin_fanout(BOT_TOKEN)
+    logger.info("Scheduled checkin fan-out complete")
 
 
 async def _run():
