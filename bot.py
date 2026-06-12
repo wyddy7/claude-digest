@@ -23,13 +23,10 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 import db
+from logging_setup import setup_logging
 
 load_dotenv()
-_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
-# Keep noisy libraries at INFO even in DEBUG mode
-for _lib in ("httpx", "httpcore", "telegram", "apscheduler"):
-    logging.getLogger(_lib).setLevel(logging.WARNING)
+setup_logging("bot")
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
