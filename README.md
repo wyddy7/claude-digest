@@ -1,6 +1,9 @@
 # Digest Bot
 
-Personal Telegram bot that scrapes selected public channels and generates an AI-personalized digest.
+Multi-tenant Telegram bot that scrapes selected public channels and delivers an
+AI-personalized daily digest. Invite-gated onboarding, per-user channels / focus /
+model, a Pro trial, and Telegram Stars payments — every user runs through one
+shared pipeline with their own settings and limits.
 
 ## Sample Output
 
@@ -45,59 +48,91 @@ tiered Russian-language digest with per-source fairness and a short "more" tail.
 <i>ещё: Go proposal — generic methods (type parameters на конкретных методах) · Apple и Google как активные посредники в push-уведомлениях: суммаризация на устройстве · AMD изменила лицензирование Vivado для Linux без предупреждения</i>
 ```
 
-## Local Setup
+## Features
+
+- **Onboarding**: invite gate → 3-step wizard (pick a curated channel set, set a
+  focus) → an immediate preview digest. State persists in the DB and survives
+  restarts.
+- **Per-user everything**: channels, focus, digest model, history, and quotas are
+  all keyed per user. Limits come from DB tier defaults, never hard-coded.
+- **Surfaces**: 📰 digest · ⚙️ settings (channels / model / focus / auto-reset) ·
+  👤 profile · 📚 history (paginated) · 💎 subscription · a chat-with-digest agent
+  with per-user memory and user-scoped tools.
+- **Subscriptions**: 3-day Pro trial, then Telegram Stars (XTR) payments with an
+  idempotent payment ledger. Access is always computed at runtime from
+  `pro_until` / `trial_ends_at`.
+- **Scheduler**: a daily fan-out (13:00 MSK) delivers each active user their own
+  digest; a check-in fan-out (18:00 MSK) nudges engagement.
+
+## Architecture
+
+- `python-telegram-bot` (polling) + a standalone `scheduler.py` process.
+- **Supabase** (HTTP API via `supabase-py`) is the only datastore — no local
+  state files. Schema is managed by Alembic migrations under `migrations/`.
+- The digest pipeline (`agent.run_digest_pipeline`) is a plain deterministic
+  async function (scrape → read → ad-filter → generate); per-user inputs ride on
+  a `PipelineConfig`.
+- The chat agent (`deepagents` + an in-memory checkpointer) is the only
+  model-driven loop; its tools are closures scoped to one user.
+
+## Setup
 
 1. Install `uv`.
 2. Create `.env`:
 
 ```env
-BOT_TOKEN=...
-CHAT_ID=...
-OPENROUTER_KEY=...
+BOT_TOKEN=...           # BotFather token
+CHAT_ID=...             # owner's numeric Telegram id (seeded as a Pro user at startup)
+ADMIN_ID=...            # numeric id allowed to run admin commands (usually = CHAT_ID; 0 disables them)
+OPENROUTER_KEY=...      # LLM access (OpenRouter)
+SUPABASE_URL=...        # Supabase project URL (HTTP API)
+SUPABASE_KEY=...        # service-role key
+HTTPS_PROXY=...         # optional, for restricted networks
+LOG_LEVEL=INFO          # optional
+LOG_DIR=logs            # optional — rotating file logs (gitignored); LOG_TO_FILE=0 to disable
 ```
 
-3. Create local personalization config:
+3. Apply the schema to your Supabase project (Alembic is not wired to CI — run it
+   manually against a dev/prod DB):
 
 ```bash
-cd digest_bot
-copy config\personalization.example.yaml config\personalization.yaml
+SUPABASE_DB_URL="postgresql+psycopg2://USER:PASS@HOST:5432/postgres" \
+  uv run --with alembic --with sqlalchemy --with psycopg2-binary alembic upgrade head
 ```
 
-4. Edit `config/personalization.yaml` with:
-- private user profile details
-- prompt style and digest preferences
-- stop words and similar tuning rules
+4. Optionally edit `config/personalization.yaml` (profile + prompt tuning); it is
+   the fallback when a user has no per-user personalization. Commit only
+   `config/personalization.example.yaml`.
 
 5. Install dependencies and run:
 
 ```bash
 uv sync
-uv run bot.py
+uv run bot.py          # the bot (polling)
+uv run scheduler.py    # the daily digest/check-in scheduler (separate process)
 ```
 
-## Data Layout
+The owner (`CHAT_ID`) is backfilled into the `users` table as a Pro user on first
+start, and any legacy single-tenant digest history is linked to them — nothing is
+lost on the multi-tenant cutover.
 
-- `data/data.json` stores channels, focus, selected model, and lightweight interaction state.
-- `data/digests_history.json` stores generated digest history.
-- `config/personalization.yaml` stores private profile context and prompt tuning.
+## Admin commands
 
-## Security Rules
+`ADMIN_ID`-gated (silently ignored for everyone else):
 
-- Keep secrets only in `.env` or deployment secrets.
-- Keep sensitive or flexible prompt/profile data only in `config/personalization.yaml`.
-- Commit only `config/personalization.example.yaml`.
-- Do not commit runtime state JSON files.
+- `/grant_trial <tg_id>` — invite a user and grant the 3-day Pro trial.
+- `/give_pro <tg_id> <days>` — comp Pro (stacks on any active remainder).
+- `/revoke_pro <tg_id>` — clear Pro / trial access.
+- `/reset_user <tg_id> [full]` — re-arm onboarding (or `full` to delete the rows).
 
 ## Tests
 
-Offline integration checks:
-
 ```bash
-uv run test_ai_integration.py
+uv run python test_ai_integration.py   # offline, must be green before pushing
+uv run pytest -q                       # offline unit suite
+uv run test_smoke.py                   # live (needs real credentials)
 ```
 
-Smoke test:
+## License
 
-```bash
-uv run test_smoke.py
-```
+MIT.
