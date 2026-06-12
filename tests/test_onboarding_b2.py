@@ -446,7 +446,6 @@ async def test_expired_trial_shows_paywall_no_pipeline(fdb, monkeypatch):
     # Also patch run_digest_pipeline in case the gate ever failed to block.
     with patch("agent.run_digest_pipeline", pipeline_mock):
         ctx = FakeContext()
-        ctx.user_data["is_owner"] = False
         ctx.user_data["user"] = copy.deepcopy(fdb.users[INVITED_USER])
         upd = _make_update(text="/start")
 
@@ -475,7 +474,6 @@ async def test_active_trial_does_not_hit_paywall(fdb, monkeypatch):
     deliver_mock = AsyncMock(return_value=3)
     with patch("handlers.digest.deliver_digest", deliver_mock):
         ctx = FakeContext()
-        ctx.user_data["is_owner"] = False
         ctx.user_data["user"] = copy.deepcopy(fdb.users[INVITED_USER])
         upd = _make_update(text="📰")
 

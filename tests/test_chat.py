@@ -55,7 +55,7 @@ class FakeMessage:
 
 class FakeContext:
     def __init__(self, user: dict):
-        self.user_data: dict = {"user": user, "is_owner": False}
+        self.user_data: dict = {"user": user}
         self.application = SimpleNamespace(bot_data={"checkpointer": object()})
 
 

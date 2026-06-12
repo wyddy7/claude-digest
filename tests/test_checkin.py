@@ -276,12 +276,13 @@ async def test_cb_ci_no_empty_digest_for_tenant(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cb_ci_talk_sets_chat_state():
-    """ci_talk sets context.user_data['state'] = 'chat' and edits the message."""
+async def test_cb_ci_talk_shows_prompt():
+    """ci_talk shows the talk prompt. No state flag is set — in the unified router
+    any subsequent free text already falls through to the chat agent."""
     upd, q = _make_update("ci_talk")
     ctx = FakeContext(user_row={"id": _UUID_A, "tg_user_id": _TG_A})
 
     await checkin_mod.cb_checkin(upd, ctx)
 
-    assert ctx.user_data.get("state") == "chat"
+    assert "state" not in ctx.user_data
     assert q.edits and CHECKIN_TALK_PROMPT in q.edits[0]

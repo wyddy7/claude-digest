@@ -6,8 +6,9 @@ Two components:
 - chat_agent:          stateful (Supabase checkpointer), conversational with history tools
 
 Entry points:
-- run_digest_pipeline(on_status) — called by scheduler and bot
-- run_chat_turn(user_id, message, checkpointer) — called by handle_text in bot.py
+- run_digest_pipeline(on_status) — called by handlers.digest.deliver_digest + scheduler
+- run_chat_turn(user_id, message, checkpointer, *, scope_user_id) — called by
+  handlers.chat._chat_with_digest (the unified multi-tenant text router)
 """
 
 import asyncio
@@ -130,29 +131,6 @@ def _recent_digests_payload(history: list[dict]) -> list[dict]:
     ]
 
 
-# ── legacy/global tools (owner single-tenant path; user_id=None) ──────────────
-
-@tool
-async def search_digest_history(query: str) -> list[dict]:
-    """Search past digests by keyword. Returns matching entries (date, snippet)."""
-    history = await db.load_history()
-    return _search_digest_history_results(history, query)
-
-
-@tool
-async def get_recent_digests(n: int = 3) -> list[dict]:
-    """Return the N most recent digest entries with date and content."""
-    history = await db.load_history(limit=n)
-    return _recent_digests_payload(history)
-
-
-@tool
-async def get_current_focus() -> str:
-    """Return the user's current digest focus (if any)."""
-    data = await db.load()
-    return data.get("current_focus", "") or "не задан"
-
-
 # ── per-user (tenant-scoped) tool factory ─────────────────────────────────────
 
 def _make_user_scoped_tools(user_id: str) -> list:
@@ -184,25 +162,21 @@ def _make_user_scoped_tools(user_id: str) -> list:
 
 # ─── Chat agent factory ───────────────────────────────────────────────────────
 
-def create_chat_agent(system_prompt: str, checkpointer, user_id: str | None = None):
+def create_chat_agent(system_prompt: str, checkpointer, user_id: str):
     """Stateful conversational agent with checkpointer-backed memory.
 
-    user_id: the tenant's UUID. When given, the agent's tools are scoped to that
-    tenant's data (db.load_user_history / db.load_settings). When None (legacy
-    owner single-tenant path), the global tools over db.load()/db.load_history()
-    are used. There is no shared mutable tool state — scoped tools are fresh
-    closures per call."""
+    user_id: the tenant's UUID. The agent's tools are scoped to that tenant's
+    data (db.load_user_history / db.load_settings) — the agent never sees a
+    user_id argument, so a tenant can only ever read their own digests/focus.
+    There is no shared mutable tool state — scoped tools are fresh closures per
+    call."""
     system = system_prompt + (
         "\n\nYou have access to tools to search past digests and get context. "
         "Use search_digest_history when the user asks about past topics. "
         "Use get_recent_digests to reference what was covered recently. "
         "Use get_current_focus to understand what the user is currently focused on."
     )
-    tools = (
-        _make_user_scoped_tools(user_id)
-        if user_id is not None
-        else [search_digest_history, get_recent_digests, get_current_focus]
-    )
+    tools = _make_user_scoped_tools(user_id)
     return create_deep_agent(
         model=_make_model("chat"),
         system_prompt=system,
@@ -434,7 +408,7 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
 
 
 async def run_chat_turn(
-    user_id: int, message: str, checkpointer, *, scope_user_id: str | None = None
+    user_id: int, message: str, checkpointer, *, scope_user_id: str
 ) -> str:
     """
     Run one chat turn. checkpointer lifecycle managed in bot.py post_init/post_shutdown.
@@ -442,26 +416,19 @@ async def run_chat_turn(
     user_id:       thread key (the numeric Telegram user id) — MemorySaver keys
                    per-user conversation state on this, so tenants never share a
                    chat thread.
-    scope_user_id: the tenant's UUID. When given, the system prompt + agent tools
-                   read ONLY that tenant's settings/history (db.load_settings /
-                   db.load_user_history). When None, the legacy single-tenant
-                   global state (db.load/db.load_history) is used (owner path).
+    scope_user_id: the tenant's UUID. The system prompt + agent tools read ONLY
+                   that tenant's settings/history (db.load_settings /
+                   db.load_user_history) — a tenant never sees another's data.
     """
-    if scope_user_id is not None:
-        settings = await db.load_settings(scope_user_id)
-        user_data = {
-            "current_focus": settings.get("current_focus") or "",
-            "interaction_history": settings.get("interaction_history") or [],
-            "openrouter_key": os.getenv("OPENROUTER_KEY"),
-        }
-        # load_user_history is newest-first; build_system_prompt/get_recent_digests
-        # expect oldest-first (the legacy load_history(limit=) contract), so reverse.
-        recent = list(reversed(await db.load_user_history(scope_user_id, limit=3)))
-    else:
-        data = await db.load()
-        user_data = data.copy()
-        user_data["openrouter_key"] = os.getenv("OPENROUTER_KEY")
-        recent = await db.load_history(limit=3)
+    settings = await db.load_settings(scope_user_id)
+    user_data = {
+        "current_focus": settings.get("current_focus") or "",
+        "interaction_history": settings.get("interaction_history") or [],
+        "openrouter_key": os.getenv("OPENROUTER_KEY"),
+    }
+    # load_user_history is newest-first; build_system_prompt/get_recent_digests
+    # expect oldest-first (the legacy load_history(limit=) contract), so reverse.
+    recent = list(reversed(await db.load_user_history(scope_user_id, limit=3)))
     system_prompt = build_system_prompt(user_data, recent_digests=recent)
     agent = create_chat_agent(system_prompt, checkpointer, user_id=scope_user_id)
     config = {"configurable": {"thread_id": str(user_id)}}

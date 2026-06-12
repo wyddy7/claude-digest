@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 # Reuse the same permissive username regex as onboarding (C3).
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
 
+# Emergency fallback only — used iff channels_max is absent from tier_defaults
+# AND the DB value is unparseable. The real cap always comes from
+# db.get_effective_limit; this is never the source of truth.
+_CHANNELS_MAX_FALLBACK = 15
+
 # A press of any of these reply-keyboard buttons (or the 🎯 focus button, matched
 # by prefix) is NEVER focus/channel input — it must escape the sub-state, not be
 # swallowed as a literal value. Guarded in handle_text below.
@@ -182,11 +187,11 @@ async def _ingest_channel(update, context) -> None:
         await update.message.reply_text(SETTINGS_ADDCH_ALREADY)
         return
 
-    cap = await db.get_effective_limit(user["id"], "channels_max", 15)
+    cap = await db.get_effective_limit(user["id"], "channels_max", _CHANNELS_MAX_FALLBACK)
     try:
         cap = int(cap)
     except (TypeError, ValueError):
-        cap = 15
+        cap = _CHANNELS_MAX_FALLBACK
 
     if len(channels) >= cap:
         await update.message.reply_text(SETTINGS_ADDCH_LIMIT_HIT.format(cap=cap))

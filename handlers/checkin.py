@@ -160,6 +160,7 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await q.edit_message_text(CHECKIN_NO_EMPTY)
 
     elif action == "ci_talk":
+        # No state flag needed: in the unified router any subsequent free text
+        # already falls through to the chat-with-digest agent.
         await _safe_answer(q)
-        context.user_data["state"] = "chat"
         await q.edit_message_text(CHECKIN_TALK_PROMPT)

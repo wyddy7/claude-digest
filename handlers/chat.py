@@ -3,10 +3,11 @@
 Dispatches the 6-button reply keyboard to its surface and owns the onboarding
 free-text escape hatches. ⚙️ Настройки and 🎯 Фокус are wired to
 handlers.settings; 📚 История is wired to handlers.history (paginated,
-tenant-scoped). The owner's rich single-tenant router in bot.py is untouched.
+tenant-scoped). This is the single text router for EVERY user — the owner is a
+normal users row and is dispatched here too (no legacy single-tenant path).
 
-Utility commands (/next, /help, /stages, /in) are also handled here for
-non-owner users. They read the caller's own DB row — never the legacy id=1 row.
+Utility commands (/next, /help, /stages, /in) are also handled here. They read
+the caller's own DB row — never a global id=1 row.
 """
 
 import logging
@@ -19,6 +20,14 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import db
+# Schedule is single-sourced in bot.py (same import checkin.py uses) — never
+# re-hardcode the hours here.
+from bot import (
+    DIGEST_HOUR as _DIGEST_HOUR,
+    DIGEST_MINUTE as _DIGEST_MINUTE,
+    CHECKIN_HOUR as _CHECKIN_HOUR,
+    CHECKIN_MINUTE as _CHECKIN_MINUTE,
+)
 from agent import run_chat_turn
 from handlers import digest as digest_surface
 from handlers import history as history_surface
@@ -43,8 +52,6 @@ from handlers.strings import (
 logger = logging.getLogger(__name__)
 
 _MOSCOW = pytz.timezone("Europe/Moscow")
-_DIGEST_HOUR, _DIGEST_MINUTE = 13, 0
-_CHECKIN_HOUR, _CHECKIN_MINUTE = 18, 0
 
 # DB fallback if chat_turns_per_month is somehow absent from tier_defaults.
 _CHAT_TURNS_FALLBACK = 50
@@ -141,10 +148,10 @@ async def _cmd_in(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict
 
 
 async def route_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry for non-owner text. Onboarding free-text is consumed first; then
-    settings sub-states; then utility commands; then the menu buttons; then a
-    polite fallback. The owner never reaches here (the middleware leaves owner
-    updates for the legacy bot.py handlers)."""
+    """Entry for ALL user text (owner included — they are a normal users row).
+    Onboarding free-text is consumed first; then settings sub-states; then
+    utility commands; then the menu buttons; then the chat agent / a polite
+    fallback."""
     text = (update.message.text or "").strip()
 
     # 1) Onboarding escape-hatch free-text (channels / focus typing).
