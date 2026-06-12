@@ -641,11 +641,36 @@ async def ensure_owner_user() -> None:
         else:
             raise
 
+    # Preserve the owner's digest back-catalog: legacy single-tenant digests were
+    # written with user_id=NULL; link them to the owner so 📚 История shows the
+    # full history. Nothing is lost in the multi-tenant cutover. Only runs when a
+    # legacy user_state was present (i.e. this DB has single-tenant history).
+    if legacy:
+        try:
+            linked = await link_orphan_digests(user_id)
+            logger.info("ensure_owner_user: linked %s legacy digest(s) to owner", linked)
+        except Exception as e:
+            logger.warning("ensure_owner_user: digest history link failed (non-fatal): %s", e)
+
     logger.info(
         "ensure_owner_user: owner backfilled as pro row (user_id=%s, pro_until=%s, "
         "seeded_from=%s)",
         user_id, far_future[:10], "legacy_user_state" if legacy else "pro_defaults",
     )
+
+
+async def link_orphan_digests(user_id: str) -> int:
+    """Attach all unlinked (legacy single-tenant) digest rows to a user_id and
+    return how many were updated. Idempotent — after the first run no digests
+    have a NULL user_id. Lets the owner keep their full digest history through
+    the multi-tenant cutover."""
+    resp = await (
+        _get_client().table("digests")
+        .update({"user_id": user_id})
+        .is_("user_id", "null")
+        .execute()
+    )
+    return len(resp.data or [])
 
 
 async def count_user_digests_today(user_id: str) -> int:
