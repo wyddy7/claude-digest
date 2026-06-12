@@ -293,10 +293,22 @@ def _build_cost_summary(config, usage_log: list[dict], reader_stats: dict | None
     per-tenant cost logging here (not implemented)."""
     per_stage: dict[str, dict] = {}
     for u in usage_log:
-        s = per_stage.setdefault(u["stage"], {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0})
+        s = per_stage.setdefault(
+            u["stage"],
+            {"model": u.get("model", ""), "prompt_tokens": 0, "completion_tokens": 0,
+             "calls": 0, "api_cost_usd": 0.0},
+        )
         s["prompt_tokens"] += u.get("prompt_tokens", 0)
         s["completion_tokens"] += u.get("completion_tokens", 0)
         s["calls"] += 1
+        if not s.get("model"):
+            s["model"] = u.get("model", "")
+        # OpenRouter's authoritative per-call USD cost, summed across the stage's
+        # calls. None entries (provider didn't report) leave it at 0.0 → priced
+        # from the fallback table in pricing.price_cost_summary.
+        c = u.get("cost_usd")
+        if c is not None:
+            s["api_cost_usd"] += float(c)
     rs = reader_stats or {}
     return {
         "read_mode": config.read_mode,

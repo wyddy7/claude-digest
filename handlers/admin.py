@@ -143,18 +143,79 @@ async def cmd_grant_trial(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+def _fmt_usd(x) -> str:
+    """Compact USD: $0.044, $1.83, +$9.87 (sign kept for margin)."""
+    try:
+        v = float(x or 0.0)
+    except (TypeError, ValueError):
+        return "$0"
+    sign = "+" if v > 0 else ("-" if v < 0 else "")
+    a = abs(v)
+    body = f"{a:.4f}".rstrip("0").rstrip(".") if a < 1 else f"{a:.2f}"
+    return f"{sign}${body}"
+
+
+def _format_dashboard(d: dict) -> str:
+    """Render the 4-tier dashboard dict (db.aggregate_stats) as a Telegram-sized
+    text report. Pure formatting — tolerant of missing keys (zeros)."""
+    e = d.get("economics", {})
+    a = d.get("activation", {})
+    g = d.get("engagement", {})
+    p = d.get("product", {})
+    win = d.get("window_days", 30)
+
+    by_model = e.get("cost_by_model", {})
+    models_line = ", ".join(f"{m.split('/')[-1]} {_fmt_usd(c)}" for m, c in list(by_model.items())[:5]) or "—"
+    tiers = a.get("tier_counts", {})
+    tiers_line = ", ".join(f"{t} {n}" for t, n in sorted(tiers.items())) or "—"
+
+    L = [
+        f"📊 <b>Статистика</b> · окно {win}д",
+        "",
+        "💰 <b>Юнит-экономика</b>",
+        f"• Дайджестов: {e.get('digests', 0)}",
+        f"• Себестоимость: {_fmt_usd(e.get('total_cost_usd'))} (⌀ {_fmt_usd(e.get('cost_per_digest_usd'))}/дайдж)",
+        f"• ⌀ на юзера: {_fmt_usd(e.get('cost_per_user_usd'))}",
+        f"• Выручка: {e.get('revenue_stars', 0)}⭐ ≈ {_fmt_usd(e.get('revenue_usd'))}",
+        f"• <b>Маржа: {_fmt_usd(e.get('gross_margin_usd'))}</b> · платящих: {e.get('paying_users', 0)}",
+        f"• По моделям: {models_line}",
+        "",
+        "📈 <b>Активация</b>",
+        f"• Юзеров: {a.get('users_total', 0)} (новых за окно: {a.get('signups_in_window', 0)})",
+        f"• Онбординг: {a.get('onboarded_in_window', 0)} · первый дайджест: {a.get('first_digest_users', 0)}",
+        f"• DAU/WAU/MAU: {a.get('dau', 0)} / {a.get('wau', 0)} / {a.get('mau', 0)}",
+        f"• Тиры: {tiers_line} (актив pro: {a.get('active_pro', 0)})",
+        f"• Конверсия signup→paid: {a.get('signup_to_paid_pct', 0)}%",
+        "",
+        "💬 <b>Вовлечённость</b>",
+        f"• Чат-тёрнов: {g.get('chat_turns', 0)} (юзеров {g.get('chat_users', 0)})",
+        f"• Упёрлись в лимит: {g.get('quota_hits', 0)} (юзеров {g.get('quota_hit_users', 0)})",
+        f"• Ошибки дайджестов: {g.get('digest_error_rate_pct', 0)}% ({g.get('digest_errors', 0)})",
+        "",
+        "🔧 <b>Продукт</b> (read_mode)",
+    ]
+    rm = p.get("read_mode_cost", {})
+    if rm:
+        for mode, v in rm.items():
+            L.append(f"• {mode}: {v.get('digests', 0)} дайдж · ⌀ {_fmt_usd(v.get('avg_cost_usd'))}")
+    else:
+        L.append("• —")
+    return "\n".join(L)
+
+
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/stats — admin feature-usage readout. Aggregates the per-user _usage JSONB
-    counters (digest_manual, onboarding_done, payment, chat, …) across all users,
-    by month, and replies the raw JSON so the owner can eyeball or copy it out.
-    No personal profile data is read — only the reserved analytics namespace."""
+    """/stats [days] — admin 4-tier dashboard: unit economics (cost/digest, cost/
+    user, Stars revenue, gross margin — USD straight from OpenRouter's usage.cost),
+    activation (DAU/WAU/MAU, funnel, tier mix), engagement (quota hits, error rate),
+    and product (read_mode cost delta). Default window 30d; `/stats 7` for 7d. Reads
+    only usage_events + subscription_events + the users snapshot — no profile data."""
     if not _is_admin(update):
         return
-    import json
-
-    stats = await db.aggregate_usage_stats()
-    blob = json.dumps(stats, ensure_ascii=False, indent=2)
-    # Telegram hard-caps a message at 4096 chars; keep headroom for the fences.
-    if len(blob) > 3900:
-        blob = blob[:3900] + "\n… (truncated)"
-    await update.message.reply_text(f"```json\n{blob}\n```", parse_mode="Markdown")
+    days = 30
+    if context.args:
+        try:
+            days = max(1, min(365, int(context.args[0])))
+        except (TypeError, ValueError):
+            pass
+    stats = await db.aggregate_stats(days)
+    await update.message.reply_text(_format_dashboard(stats), parse_mode="HTML")

@@ -411,70 +411,133 @@ async def test_manual_digest_delivers_under_cap(monkeypatch):
     assert delivered == [1], "under cap, the digest pipeline should run"
 
 
-# ─── feature-usage analytics ──────────────────────────────────────────────────
+# ─── product telemetry + cost (usage_events) ──────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_bump_usage_increments_and_preserves_chat_turns(monkeypatch):
-    """bump_usage increments events[<month>][<event>] via read-merge-write and
-    never clobbers the existing chat_turns counter in the same _usage blob."""
-    month = db_module._current_usage_month()
-    store = {"personalization": {"_usage": {"chat_turns": {month: 7}},
-                                 "profile": {"description": "keep me"}}}
-
-    async def _load(uid):
-        return copy.deepcopy(store)
-
-    async def _save(uid, fields):
-        store.update(fields)
-        return store
-
-    monkeypatch.setattr(db_module, "load_settings", _load)
-    monkeypatch.setattr(db_module, "save_settings", _save)
-
-    await db_module.bump_usage(_USER_ID, "digest_manual")
-    await db_module.bump_usage(_USER_ID, "digest_manual")
-    await db_module.bump_usage(_USER_ID, "payment")
-
-    usage = store["personalization"]["_usage"]
-    assert usage["events"][month]["digest_manual"] == 2
-    assert usage["events"][month]["payment"] == 1
-    assert usage["chat_turns"][month] == 7, "chat_turns must be preserved"
-    assert store["personalization"]["profile"]["description"] == "keep me"
-
-
-@pytest.mark.asyncio
-async def test_aggregate_usage_stats_sums_across_users(monkeypatch):
-    """aggregate_usage_stats sums events + chat turns across all user_settings
-    rows, grouped by month, and counts active users."""
-    rows = [
-        {"personalization": {"_usage": {
-            "events": {"2026-06": {"digest_manual": 3, "payment": 1}},
-            "chat_turns": {"2026-06": 5}}}},
-        {"personalization": {"_usage": {
-            "events": {"2026-06": {"digest_manual": 2}}}}},
-        {"personalization": {"profile": {"description": "x"}}},  # no usage → inactive
-    ]
+async def test_log_event_inserts_row_and_swallows_failure(monkeypatch):
+    """log_event inserts {event,user_id,cost_usd} into usage_events; a DB failure
+    is swallowed (best-effort) so a user action never breaks on telemetry."""
+    captured: list = []
 
     class _Q:
-        def select(self, *a, **k):
+        def insert(self, row):
+            captured.append(row)
             return self
         async def execute(self):
-            return SimpleNamespace(data=rows)
+            return SimpleNamespace(data=[{}])
 
     class _Client:
         def table(self, name):
-            assert name == "user_settings"
+            assert name == "usage_events"
             return _Q()
 
     monkeypatch.setattr(db_module, "_get_client", lambda: _Client())
 
-    stats = await db_module.aggregate_usage_stats()
-    assert stats["users_total"] == 3
-    assert stats["users_active"] == 2
-    june = stats["by_month"]["2026-06"]
-    assert june["digest_manual"] == 5  # 3 + 2
-    assert june["payment"] == 1
-    assert june["chat"] == 5
+    await db_module.log_event(_USER_ID, "digest_generated", {"k": 1}, cost_usd=0.0123456789)
+    assert captured[0]["event"] == "digest_generated"
+    assert captured[0]["user_id"] == _USER_ID
+    assert captured[0]["cost_usd"] == round(0.0123456789, 6)
+    await db_module.bump_usage(_USER_ID, "payment")  # counter-style: no cost key
+    assert captured[1]["event"] == "payment" and "cost_usd" not in captured[1]
+
+    # A raising client must NOT propagate (instrumentation is never load-bearing).
+    class _BoomClient:
+        def table(self, name):
+            raise RuntimeError("table missing")
+
+    monkeypatch.setattr(db_module, "_get_client", lambda: _BoomClient())
+    await db_module.log_event(_USER_ID, "chat")  # no exception = pass
+
+
+@pytest.mark.asyncio
+async def test_record_digest_cost_uses_api_cost(monkeypatch):
+    """record_digest_cost prices the cost_summary (preferring OpenRouter's
+    authoritative api_cost_usd) and logs it as cost_usd on a digest_generated row."""
+    logged: list = []
+
+    async def _log(uid, event, payload=None, cost_usd=None):
+        logged.append((event, payload, cost_usd))
+
+    monkeypatch.setattr(db_module, "log_event", _log)
+    cost_summary = {
+        "read_mode": "extract",
+        "per_stage_tokens": {
+            "digest": {"model": "anthropic/claude-3.5-haiku", "prompt_tokens": 1000,
+                       "completion_tokens": 500, "calls": 1, "api_cost_usd": 0.04},
+            "ad_filter": {"model": "deepseek/deepseek-chat", "prompt_tokens": 200,
+                          "completion_tokens": 50, "calls": 2, "api_cost_usd": 0.001},
+        },
+    }
+    await db_module.record_digest_cost(
+        _USER_ID, cost_summary, posts_count=7, is_error=False, source="cron")
+    event, payload, cost_usd = logged[0]
+    assert event == "digest_generated"
+    assert cost_usd == pytest.approx(0.041)  # 0.04 + 0.001, from API cost not table
+    assert payload["source"] == "cron" and payload["read_mode"] == "extract"
+    assert payload["by_model"]["anthropic/claude-3.5-haiku"] == pytest.approx(0.04)
+
+
+def test_build_dashboard_economics_funnel_engagement():
+    """build_dashboard is pure: feed events/subs/users → assert all four tiers
+    (margin, cost/digest, DAU, funnel, error rate, read_mode split)."""
+    from datetime import timedelta
+
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc)
+    recent = (now - timedelta(hours=1)).isoformat()
+    A, B = "user-a", "user-b"
+
+    def digest(uid, cost, rm, err, model="anthropic/claude-3.5-haiku"):
+        return {"user_id": uid, "event": "digest_generated", "cost_usd": cost,
+                "created_at": recent,
+                "payload": {"read_mode": rm, "is_error": err, "by_model": {model: cost}}}
+
+    events = [
+        digest(A, 0.02, "off", False), digest(A, 0.03, "off", False),
+        digest(B, 0.05, "extract", True),
+        {"user_id": A, "event": "chat", "created_at": recent, "payload": {}},
+        {"user_id": A, "event": "chat", "created_at": recent, "payload": {}},
+        {"user_id": B, "event": "chat", "created_at": recent, "payload": {}},
+        {"user_id": A, "event": "quota_hit", "created_at": recent, "payload": {}},
+        {"user_id": A, "event": "onboarding_done", "created_at": recent, "payload": {}},
+        {"user_id": B, "event": "onboarding_done", "created_at": recent, "payload": {}},
+    ]
+    subs = [{"user_id": A, "event_type": "payment", "stars_amount": 900, "created_at": recent}]
+    users = [
+        {"id": A, "tier": "pro", "created_at": (now - timedelta(days=2)).isoformat(),
+         "pro_until": (now + timedelta(days=10)).isoformat()},
+        {"id": B, "tier": "trial", "created_at": (now - timedelta(days=2)).isoformat(),
+         "pro_until": None},
+        {"id": "user-c", "tier": "trial", "created_at": (now - timedelta(days=400)).isoformat(),
+         "pro_until": None},
+    ]
+
+    d = db_module.build_dashboard(events, subs, users, now=now, days=30)
+
+    e = d["economics"]
+    assert e["digests"] == 3
+    assert e["total_cost_usd"] == pytest.approx(0.10)
+    assert e["cost_per_digest_usd"] == pytest.approx(0.10 / 3, abs=1e-4)
+    assert e["revenue_stars"] == 900
+    assert e["revenue_usd"] == pytest.approx(900 * 0.013)
+    assert e["gross_margin_usd"] == pytest.approx(900 * 0.013 - 0.10)
+    assert e["paying_users"] == 1
+    assert e["cost_by_model"]["anthropic/claude-3.5-haiku"] == pytest.approx(0.10)
+
+    a = d["activation"]
+    assert a["users_total"] == 3 and a["signups_in_window"] == 2
+    assert a["onboarded_in_window"] == 2 and a["first_digest_users"] == 2
+    assert a["dau"] == 2 and a["wau"] == 2 and a["mau"] == 2
+    assert a["tier_counts"] == {"pro": 1, "trial": 2} and a["active_pro"] == 1
+    assert a["signup_to_paid_pct"] == pytest.approx(50.0)
+
+    g = d["engagement"]
+    assert g["chat_turns"] == 3 and g["chat_users"] == 2
+    assert g["quota_hits"] == 1 and g["quota_hit_users"] == 1
+    assert g["digest_errors"] == 1 and g["digest_error_rate_pct"] == pytest.approx(33.3)
+
+    rm = d["product"]["read_mode_cost"]
+    assert rm["off"]["digests"] == 2 and rm["off"]["avg_cost_usd"] == pytest.approx(0.025)
+    assert rm["extract"]["digests"] == 1 and rm["extract"]["avg_cost_usd"] == pytest.approx(0.05)
 
 
 def test_digest_day_bucket_is_msk_not_utc():
