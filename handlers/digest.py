@@ -138,6 +138,7 @@ async def send_digest(update, context):
 
     try:
         await deliver_digest(context.bot, user, on_status=_on_status)
+        await db.bump_usage(user["id"], "digest_manual")
     except Exception as e:
         logger.warning("send_digest failed for %s: %s", user.get("tg_user_id"), e)
         await update.effective_message.reply_text(DIGEST_ERROR)

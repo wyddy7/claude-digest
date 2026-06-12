@@ -404,7 +404,82 @@ async def test_manual_digest_delivers_under_cap(monkeypatch):
     monkeypatch.setattr(digest_mod.db, "get_effective_limit", AsyncMock(return_value=1))
     monkeypatch.setattr(digest_mod.db, "count_user_digests_today", AsyncMock(return_value=0))
 
+    monkeypatch.setattr(digest_mod.db, "bump_usage", AsyncMock())
     upd, ctx = _FakeUpdate(), _active_ctx(_active_user())
     await digest_mod.send_digest(upd, ctx)
 
     assert delivered == [1], "under cap, the digest pipeline should run"
+
+
+# ─── feature-usage analytics ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_bump_usage_increments_and_preserves_chat_turns(monkeypatch):
+    """bump_usage increments events[<month>][<event>] via read-merge-write and
+    never clobbers the existing chat_turns counter in the same _usage blob."""
+    month = db_module._current_usage_month()
+    store = {"personalization": {"_usage": {"chat_turns": {month: 7}},
+                                 "profile": {"description": "keep me"}}}
+
+    async def _load(uid):
+        return copy.deepcopy(store)
+
+    async def _save(uid, fields):
+        store.update(fields)
+        return store
+
+    monkeypatch.setattr(db_module, "load_settings", _load)
+    monkeypatch.setattr(db_module, "save_settings", _save)
+
+    await db_module.bump_usage(_USER_ID, "digest_manual")
+    await db_module.bump_usage(_USER_ID, "digest_manual")
+    await db_module.bump_usage(_USER_ID, "payment")
+
+    usage = store["personalization"]["_usage"]
+    assert usage["events"][month]["digest_manual"] == 2
+    assert usage["events"][month]["payment"] == 1
+    assert usage["chat_turns"][month] == 7, "chat_turns must be preserved"
+    assert store["personalization"]["profile"]["description"] == "keep me"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_usage_stats_sums_across_users(monkeypatch):
+    """aggregate_usage_stats sums events + chat turns across all user_settings
+    rows, grouped by month, and counts active users."""
+    rows = [
+        {"personalization": {"_usage": {
+            "events": {"2026-06": {"digest_manual": 3, "payment": 1}},
+            "chat_turns": {"2026-06": 5}}}},
+        {"personalization": {"_usage": {
+            "events": {"2026-06": {"digest_manual": 2}}}}},
+        {"personalization": {"profile": {"description": "x"}}},  # no usage → inactive
+    ]
+
+    class _Q:
+        def select(self, *a, **k):
+            return self
+        async def execute(self):
+            return SimpleNamespace(data=rows)
+
+    class _Client:
+        def table(self, name):
+            assert name == "user_settings"
+            return _Q()
+
+    monkeypatch.setattr(db_module, "_get_client", lambda: _Client())
+
+    stats = await db_module.aggregate_usage_stats()
+    assert stats["users_total"] == 3
+    assert stats["users_active"] == 2
+    june = stats["by_month"]["2026-06"]
+    assert june["digest_manual"] == 5  # 3 + 2
+    assert june["payment"] == 1
+    assert june["chat"] == 5
+
+
+def test_digest_day_bucket_is_msk_not_utc():
+    """The daily-cap day bucket must be Europe/Moscow (matches append_user_digest),
+    not UTC — otherwise the cap under-counts during 21:00–24:00 UTC."""
+    import pytz
+    expected = datetime.now(pytz.timezone("Europe/Moscow")).strftime("%Y-%m-%d")
+    assert db_module._digest_day_msk() == expected

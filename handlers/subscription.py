@@ -225,6 +225,9 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             SUB_PAYMENT_GRANTED.format(active_until=result.active_until_human)
         )
+        _uid = (context.user_data.get("user") or {}).get("id")
+        if _uid:
+            await db.bump_usage(_uid, "payment")
     else:
         await update.message.reply_text(
             SUB_PAYMENT_DUPLICATE.format(active_until=result.active_until_human)

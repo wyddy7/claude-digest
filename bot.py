@@ -154,6 +154,7 @@ def main():
     app.add_handler(CommandHandler("revoke_pro", admin_surface.cmd_revoke_pro))
     app.add_handler(CommandHandler("grant_trial", admin_surface.cmd_grant_trial))
     app.add_handler(CommandHandler("reset_user", admin_surface.cmd_reset_user))
+    app.add_handler(CommandHandler("stats", admin_surface.cmd_stats))
 
     app.add_error_handler(error_handler)
 

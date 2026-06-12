@@ -491,5 +491,6 @@ async def _run_preview(update, context):
     finally:
         # Channels saved → always reach 'done'; do not trap on transient failure.
         await db.update_user_fields(user["tg_user_id"], {"onboarding_state": ST_DONE})
+        await db.bump_usage(user["id"], "onboarding_done")
         for k in ("onb_channels", "onb_topics", "onb_substate"):
             context.user_data.pop(k, None)

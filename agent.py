@@ -41,10 +41,17 @@ COMPACT_TARGET = 10    # messages we want to keep in the tail
 COMPACT_SLACK = 5      # ± positions to search for a HumanMessage boundary
 
 
-def _make_model(role: str = "chat") -> ChatOpenAI:
-    """Build a ChatOpenAI pointed at OpenRouter. role: 'chat' | 'digest'."""
-    cfg = load_personalization()
-    model_id = cfg.get("models", {}).get(role, "anthropic/claude-sonnet-4-6")
+def _make_model(role: str = "chat", model_id: str | None = None) -> ChatOpenAI:
+    """Build a ChatOpenAI pointed at OpenRouter.
+
+    model_id: the per-user model from user_settings (db.load_settings always
+    populates it, default 'anthropic/claude-3.5-haiku'). When given it wins, so
+    each tenant's chat runs on THEIR selected model. Only when it's absent do we
+    fall back to the owner yaml models.<role> (legacy) and then a hard default —
+    the owner's private yaml no longer silently sets the chat model for everyone.
+    """
+    if not model_id:
+        model_id = load_personalization().get("models", {}).get(role) or "anthropic/claude-3.5-haiku"
     key = os.getenv("OPENROUTER_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_KEY env var is not set")
@@ -162,7 +169,7 @@ def _make_user_scoped_tools(user_id: str) -> list:
 
 # ─── Chat agent factory ───────────────────────────────────────────────────────
 
-def create_chat_agent(system_prompt: str, checkpointer, user_id: str):
+def create_chat_agent(system_prompt: str, checkpointer, user_id: str, model_id: str | None = None):
     """Stateful conversational agent with checkpointer-backed memory.
 
     user_id: the tenant's UUID. The agent's tools are scoped to that tenant's
@@ -178,7 +185,7 @@ def create_chat_agent(system_prompt: str, checkpointer, user_id: str):
     )
     tools = _make_user_scoped_tools(user_id)
     return create_deep_agent(
-        model=_make_model("chat"),
+        model=_make_model("chat", model_id=model_id),
         system_prompt=system,
         tools=tools,
         checkpointer=checkpointer,
@@ -448,7 +455,10 @@ async def run_chat_turn(
     system_prompt = build_system_prompt(
         user_data, recent_digests=recent, personalization=personalization
     )
-    agent = create_chat_agent(system_prompt, checkpointer, user_id=scope_user_id)
+    agent = create_chat_agent(
+        system_prompt, checkpointer, user_id=scope_user_id,
+        model_id=settings.get("model"),
+    )
     config = {"configurable": {"thread_id": str(user_id)}}
 
     try:

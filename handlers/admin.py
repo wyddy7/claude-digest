@@ -141,3 +141,20 @@ async def cmd_grant_trial(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception:
         pass
+
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/stats — admin feature-usage readout. Aggregates the per-user _usage JSONB
+    counters (digest_manual, onboarding_done, payment, chat, …) across all users,
+    by month, and replies the raw JSON so the owner can eyeball or copy it out.
+    No personal profile data is read — only the reserved analytics namespace."""
+    if not _is_admin(update):
+        return
+    import json
+
+    stats = await db.aggregate_usage_stats()
+    blob = json.dumps(stats, ensure_ascii=False, indent=2)
+    # Telegram hard-caps a message at 4096 chars; keep headroom for the fences.
+    if len(blob) > 3900:
+        blob = blob[:3900] + "\n… (truncated)"
+    await update.message.reply_text(f"```json\n{blob}\n```", parse_mode="Markdown")
