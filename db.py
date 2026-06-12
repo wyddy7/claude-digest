@@ -734,10 +734,13 @@ async def delete_user_rows(tg_user_id: int) -> bool:
 
 
 async def load_personalization_db(tenant_id: str) -> dict:
-    """Return the personalization JSONB for a tenant (the user's UUID id). Falls
-    back to an empty dict — the caller (build_pipeline_config consumer) then uses
-    the legacy yaml template. After cutover this is the runtime source, not the
-    file."""
+    """Return the raw personalization JSONB for a tenant (the user's UUID id);
+    empty dict if unset. NOTE: this blob is NOT prompt-ready — it may contain
+    reserved namespaces (the "_usage" chat-turn counter) and is only a per-user
+    OVERRIDE layer. Callers must pass it through
+    personalization.resolve_personalization(blob, tg_user_id), which strips
+    reserved keys and merges over the neutral default (or the owner's yaml for
+    the owner) — never feed it to the prompt directly."""
     resp = await (
         _get_client().table("user_settings")
         .select("personalization")

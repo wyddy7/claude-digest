@@ -17,8 +17,8 @@ import httpx
 import db
 from agent import run_digest_pipeline
 from handlers.middleware import requires_tier
-from handlers.strings import DIGEST_COLLECTING, DIGEST_ERROR
-from personalization import load_personalization
+from handlers.strings import DIGEST_COLLECTING, DIGEST_DAILY_CAP, DIGEST_ERROR
+from personalization import is_owner, resolve_personalization
 from pipeline_config import build_pipeline_config, make_openrouter_client
 
 logger = logging.getLogger(__name__)
@@ -26,9 +26,16 @@ logger = logging.getLogger(__name__)
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 
 
-async def _build_user_config(user_id: str) -> tuple:
-    """Build (PipelineConfig, settings) for a tenant from their saved settings +
-    per-tenant personalization (falling back to the legacy yaml template)."""
+async def _build_user_config(user: dict) -> tuple:
+    """Build (PipelineConfig, settings) for one user from their saved settings +
+    resolved personalization.
+
+    Privacy boundary: resolve_personalization gives the owner (env CHAT_ID)
+    their private yaml, and every other tenant the neutral committed default
+    merged with their own DB overrides — NEVER the owner's yaml. The previous
+    `load_personalization_db(...) or load_personalization()` fallback leaked
+    the owner's profile into every tenant's prompt."""
+    user_id = user["id"]
     settings = await db.load_settings(user_id)
     cfg_data = {
         "channels": settings.get("channels") or [],
@@ -39,7 +46,9 @@ async def _build_user_config(user_id: str) -> tuple:
         "last_digest_time": settings.get("last_digest_time") or "",
         "interaction_history": settings.get("interaction_history") or [],
     }
-    cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
+    cfg_yaml = resolve_personalization(
+        settings.get("personalization"), user.get("tg_user_id")
+    )
     # Per-user recent digests for de-dup context (scoped to THIS user, not global).
     recent = await db.load_user_history(user_id, limit=3)
     return build_pipeline_config(cfg_data, cfg_yaml, recent_digests=recent), settings
@@ -56,7 +65,7 @@ async def deliver_digest(bot, user: dict, *, on_status=None) -> int:
     user_id = user["id"]
     tg_user_id = user["tg_user_id"]
 
-    config, _settings = await _build_user_config(user_id)
+    config, _settings = await _build_user_config(user)
     llm_client = make_openrouter_client(OPENROUTER_KEY)
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as fetcher:
         result = await run_digest_pipeline(
@@ -96,9 +105,29 @@ async def deliver_digest(bot, user: dict, *, on_status=None) -> int:
 
 @requires_tier("trial_or_paid")
 async def send_digest(update, context):
-    """📰 Дайджест for a non-owner user. Gated: an expired user is intercepted by
-    the decorator (paywall) and this body never runs (no LLM spend)."""
+    """📰 Дайджест. Gated: an expired user is intercepted by the decorator
+    (paywall) and this body never runs (no LLM spend). Active users are still
+    capped by digests_per_day (parity with the cron fan-out) so an active trial
+    user can't hammer the full pipeline unbounded; the owner is exempt for
+    testing."""
     user = context.user_data["user"]
+
+    # Manual 📰 cap — same digests_per_day budget as the cron path (shared daily
+    # counter via count_user_digests_today). Without it, manual requests were an
+    # unbounded spend window for any active user. Owner exempt so testing isn't
+    # blocked.
+    if not is_owner(user["tg_user_id"]):
+        cap = await db.get_effective_limit(user["id"], "digests_per_day", None)
+        try:
+            cap = int(cap) if cap is not None else None
+        except (TypeError, ValueError):
+            cap = None
+        if cap is not None and cap >= 0:
+            sent_today = await db.count_user_digests_today(user["id"])
+            if sent_today >= cap:
+                await update.effective_message.reply_text(DIGEST_DAILY_CAP)
+                return
+
     status_msg = await update.effective_message.reply_text(DIGEST_COLLECTING)
 
     async def _on_status(text: str):

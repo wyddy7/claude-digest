@@ -47,7 +47,8 @@ def test_pipeline_uses_config_channels_not_global(monkeypatch):
     async def fake_filter(posts, *, client, model, usage_log):
         return posts
 
-    async def fake_generate(filtered, user_data, *, client, model, recent_digests=None, usage_log=None):
+    async def fake_generate(filtered, user_data, *, client, model, recent_digests=None,
+                            usage_log=None, personalization=None):
         # The per-user profile must reach generation, not the owner's.
         assert user_data.get("current_focus") == "ml"
         return ("<b>digest</b>", "", "")

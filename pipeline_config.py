@@ -60,6 +60,13 @@ class PipelineConfig:
     channels: list = field(default_factory=list)
     user_data: dict = field(default_factory=dict)
     recent_digests: list = field(default_factory=list)
+    # RESOLVED per-user personalization (profile + prompt rules) — set by
+    # build_pipeline_config from the cfg_yaml the caller resolved via
+    # personalization.resolve_personalization. The pipeline passes it to
+    # ai.generate_digest → build_system_prompt. Empty dict (legacy/test
+    # callers) → build_system_prompt falls back to the NEUTRAL default
+    # template, never the owner's yaml.
+    personalization: dict = field(default_factory=dict)
 
 
 def stage_from_yaml(
@@ -168,6 +175,7 @@ def build_pipeline_config(
         channels=list(user_data.get("channels") or []),
         user_data=dict(user_data),
         recent_digests=list(recent_digests or []),
+        personalization=dict(cfg_yaml or {}),
     )
 
 

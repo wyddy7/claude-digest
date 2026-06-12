@@ -74,7 +74,6 @@ async def _post_init(app: Application) -> None:
             BotCommand("menu", "Главное меню"),
             BotCommand("help", "Справка по командам"),
             BotCommand("next", "Когда следующий дайджест"),
-            BotCommand("in", "Дайджест через N минут"),
             BotCommand("clear", "Очистить диалог с ассистентом"),
             BotCommand("buy", "Оформить подписку"),
         ])
@@ -121,7 +120,8 @@ def main():
     # Single multi-tenant path. The group=-1 resolve_user middleware runs for
     # EVERY update: it invite-gates, attaches the resolved users row, and (for
     # messages) dispatches into the handlers/ package — text, menu buttons,
-    # /start, onboarding, and utility commands (/menu /help /next /in /stages)
+    # /start, onboarding, and utility commands (/menu /help /next /clear;
+    # /in is admin-only)
     # are all owned there. The owner is a normal users row, so they flow through
     # the same path. Callbacks (onb|/buy|/s|/h|/ci_) fall through to their
     # dedicated CallbackQueryHandlers; payment + admin COMMANDS fall through to

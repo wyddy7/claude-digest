@@ -61,8 +61,9 @@ async def run_digest_fanout():
                     await subscriptions.maybe_warn_expiry(tg_user_id, bot)
                     continue
 
-                # N6: enforce digests_per_day on the CRON path only.
-                # Manual 📰 requests are always lenient (on-demand, user-initiated).
+                # N6: enforce digests_per_day on the cron path. The manual 📰
+                # button shares this same daily budget (handlers/digest.py), so a
+                # user can't get extra digests by alternating cron + manual.
                 daily_cap = await db.get_effective_limit(user_id, "digests_per_day", None)
                 if daily_cap is not None:
                     try:

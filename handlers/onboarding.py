@@ -25,6 +25,7 @@ import db
 import delivery
 import subscriptions
 from handlers.menu import main_kb_saas
+from handlers.middleware import _effective_tier_active
 from handlers.strings import (
     ONBOARDING_CHANNELS_MIN_ERROR,
     ONBOARDING_FOCUS,
@@ -82,6 +83,15 @@ FOCUS_CHIPS = {
     "oss": "Локальные / open-source LLM",
     "prod": "AI для продакшна / инфра",
 }
+
+# TODO(personalization, optional step 3): a skippable «пара слов о себе» step
+# that seeds user_settings.personalization["profile"]["description"]. Writer
+# contract: read settings → overlay {"profile": {"description": ...}} into the
+# existing personalization blob → save (NEVER replace the whole JSONB — the
+# reserved "_usage" chat-turn counter lives there, see db.record_chat_turn).
+# Not load-bearing for the privacy fix: a tenant without a profile gets the
+# neutral config/personalization.default.yaml via
+# personalization.resolve_personalization(). Copy goes to handlers/strings.py.
 
 
 # ── candidate-set helpers (within-step working set in user_data) ──────────────
@@ -223,6 +233,17 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Any onb| callback clears the ephemeral typing sub-state.
     context.user_data.pop("onb_substate", None)
+
+    # Replay guard: a finished user can re-tap an old onboarding inline button
+    # still living in their chat history (Telegram keeps keyboards alive). Without
+    # this, "Пропустить →" / a topic chip would re-enter the wizard, re-trigger
+    # the preview pipeline (bypassing the daily cap) AND clobber current_focus.
+    # Info popups are harmless and stay allowed; everything state-changing stops.
+    if user.get("onboarding_state") == ST_DONE and action not in {
+        "info_intro", "info_ch", "info_focus",
+    }:
+        await q.answer("Онбординг уже завершён — пользуйся кнопками меню снизу 👇")
+        return
 
     if action == "info_intro":
         await q.answer(
@@ -435,6 +456,24 @@ async def _run_preview(update, context):
     user = context.user_data["user"]
     chat = update.effective_chat
     tg_user_id = user["tg_user_id"]
+
+    # Subscription gate BEFORE any LLM spend (fail-closed). The preview is
+    # reachable outside the happy path: a /start resume on a stuck 'preview'
+    # state, a replayed onb| inline button from old chat history, or a
+    # /reset_user re-run after the trial expired. In the normal first-touch
+    # flow the trial was granted at /start, so this always passes; an
+    # expired/revoked/null-state user gets the paywall and NO pipeline run.
+    if not _effective_tier_active(user):
+        from handlers import subscription as subscription_surface
+
+        await subscription_surface.show_gate(update, context)
+        # Channels are already saved — land the user in 'done' so /start shows
+        # the menu (with the paywall), not a wizard/preview retry loop.
+        await db.update_user_fields(tg_user_id, {"onboarding_state": ST_DONE})
+        for k in ("onb_channels", "onb_topics", "onb_substate"):
+            context.user_data.pop(k, None)
+        return
+
     await context.bot.send_message(chat.id, PREVIEW_PRE)
     on_status = delivery.make_status_updater(context.bot, tg_user_id)
     try:

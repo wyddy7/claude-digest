@@ -8,7 +8,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
 
-from personalization import load_personalization
+from personalization import load_default_personalization
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +136,19 @@ def _render_example_block(items: list[str]) -> str:
     return "\n\n".join(items)
 
 
-def build_system_prompt(user_data: dict, recent_digests: list[dict] | None = None) -> str:
-    cfg = load_personalization()
+def build_system_prompt(
+    user_data: dict,
+    recent_digests: list[dict] | None = None,
+    personalization: dict | None = None,
+) -> str:
+    """Render the digest/chat system prompt for ONE user.
+
+    personalization: the RESOLVED per-user config (see
+    personalization.resolve_personalization). When omitted this falls back to
+    the neutral committed default — NEVER the owner's private yaml — so a
+    forgotten call site degrades to a generic prompt, not a privacy leak.
+    """
+    cfg = personalization if personalization is not None else load_default_personalization()
     profile_cfg = cfg.get("profile", {})
     prompt_cfg = cfg.get("prompt", {})
 
@@ -334,6 +345,7 @@ async def generate_digest(
     model: str,
     recent_digests: list[dict] | None = None,
     usage_log=None,
+    personalization: dict | None = None,
 ) -> tuple[str, str | None, str]:
     if not posts:
         return "Не нашёл новых постов за последние 24 часа.", None, ""
@@ -354,7 +366,7 @@ async def generate_digest(
         f"Отвечай ТОЛЬКО валидным JSON по схеме: {schema_hint}"
     )
 
-    system = build_system_prompt(user_data, recent_digests)
+    system = build_system_prompt(user_data, recent_digests, personalization=personalization)
 
     for attempt in range(2):
         try:

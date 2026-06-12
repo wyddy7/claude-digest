@@ -25,7 +25,7 @@ from deepagents import create_deep_agent
 import db
 import reader
 from ai import build_system_prompt, filter_ads, generate_digest, summarize_chat_history
-from personalization import load_personalization
+from personalization import load_personalization, resolve_personalization
 from pipeline_config import READ_MODE_AGENTIC, READ_MODE_EXTRACT
 from scraper import scrape_channel
 
@@ -390,6 +390,10 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     digest_html, personal_html, stats_html = await generate_digest(
         filtered, user_data, client=llm_client, model=digest_model,
         recent_digests=recent, usage_log=usage_log,
+        # Per-user resolved profile/prompt rules (privacy boundary). Empty
+        # config → None → build_system_prompt's NEUTRAL default, never the
+        # owner's yaml.
+        personalization=config.personalization or None,
     )
     logger.info(f"[digest] generated  | digest_len={len(digest_html)} | personal={'yes' if personal_html else 'no'}")
 
@@ -435,7 +439,15 @@ async def run_chat_turn(
     # load_user_history is newest-first; build_system_prompt/get_recent_digests
     # expect oldest-first (the legacy load_history(limit=) contract), so reverse.
     recent = list(reversed(await db.load_user_history(scope_user_id, limit=3)))
-    system_prompt = build_system_prompt(user_data, recent_digests=recent)
+    # Per-user personalization (privacy boundary): owner → private yaml,
+    # tenant → neutral default + their own DB overrides. user_id here is the
+    # numeric tg id, which is what is_owner() keys on.
+    personalization = resolve_personalization(
+        settings.get("personalization"), user_id
+    )
+    system_prompt = build_system_prompt(
+        user_data, recent_digests=recent, personalization=personalization
+    )
     agent = create_chat_agent(system_prompt, checkpointer, user_id=scope_user_id)
     config = {"configurable": {"thread_id": str(user_id)}}
 

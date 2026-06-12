@@ -5,7 +5,12 @@
 logs/
 __pycache__/
 *.pyc
+# Personalization configs are private (owner profile / locale variants). Only the
+# committed templates are tracked — everything else (incl. *.en.yaml) is ignored.
 config/personalization.yaml
+config/personalization.*.yaml
+!config/personalization.example.yaml
+!config/personalization.default.yaml
 data/*.json
 data.json
 digests_history.json
@@ -15,5 +20,6 @@ log.md
 test1.md
 try_reader.py
 diag_reader.py
+gen_en_demo.py
 golden-baseline-*.md
 new-output-*.md

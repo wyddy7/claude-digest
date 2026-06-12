@@ -235,3 +235,96 @@ async def test_chat_expired_user_hits_paywall_not_agent(monkeypatch):
     await chat_mod._chat_with_digest(upd, ctx, user)
 
     gate.assert_awaited_once()
+
+
+# ── /in deferred job: subscription re-checked AT FIRE TIME ────────────────────
+
+
+class _FakeJobQueue:
+    """Records run_once callbacks so the test can fire them manually."""
+
+    def __init__(self):
+        self.jobs: list = []
+
+    def run_once(self, callback, when, name=None):
+        self.jobs.append((callback, when, name))
+
+
+def _make_in_context(user: dict) -> FakeContext:
+    ctx = FakeContext(user)
+    ctx.job_queue = _FakeJobQueue()
+    ctx.bot = object()
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_in_job_expired_at_fire_time_skips_llm(monkeypatch):
+    """/in scheduled while ACTIVE must NOT generate a digest if the subscription
+    lapsed (trial expiry or admin /revoke_pro) before the job fires. The gate at
+    schedule time is not enough — the job re-fetches the row and re-checks."""
+
+    async def _must_not_run(*a, **k):
+        raise AssertionError("deliver_digest fired for a user inactive at fire time")
+
+    monkeypatch.setattr(chat_mod.digest_surface, "deliver_digest", _must_not_run)
+    # /in is admin-only; the caller is the admin for this fire-time test.
+    monkeypatch.setattr(chat_mod.admin_surface, "is_admin_id", lambda _id: True)
+
+    user = _active_user()  # active at schedule time → /in is accepted
+    upd = make_update("/in 5")
+    ctx = _make_in_context(user)
+    await chat_mod._cmd_in(upd, ctx, user)
+    assert ctx.job_queue.jobs, "/in should have scheduled a job for an active admin"
+
+    # Between scheduling and firing the subscription is revoked/expires:
+    expired_row = {"id": USER_A, "tg_user_id": TG_USER_A,
+                   "pro_until": None, "trial_ends_at": None}
+    monkeypatch.setattr(db_module, "get_user_by_tg_id", AsyncMock(return_value=expired_row))
+
+    job_cb = ctx.job_queue.jobs[0][0]
+    await job_cb(SimpleNamespace(bot=object()))  # must skip silently, no raise
+
+
+@pytest.mark.asyncio
+async def test_in_job_active_at_fire_time_delivers_fresh_row(monkeypatch):
+    """Companion: a still-active user IS delivered at fire time, and the job uses
+    the freshly fetched row (not the dict captured at schedule time)."""
+    delivered = {}
+
+    async def _deliver(bot, row, **k):
+        delivered["row"] = row
+
+    monkeypatch.setattr(chat_mod.digest_surface, "deliver_digest", _deliver)
+    monkeypatch.setattr(chat_mod.admin_surface, "is_admin_id", lambda _id: True)
+
+    user = _active_user()
+    upd = make_update("/in 5")
+    ctx = _make_in_context(user)
+    await chat_mod._cmd_in(upd, ctx, user)
+
+    fresh_row = dict(_active_user(), marker="fresh")
+    monkeypatch.setattr(db_module, "get_user_by_tg_id", AsyncMock(return_value=fresh_row))
+
+    job_cb = ctx.job_queue.jobs[0][0]
+    await job_cb(SimpleNamespace(bot=object()))
+    assert delivered["row"] is fresh_row, "job must deliver with the re-fetched row"
+
+
+@pytest.mark.asyncio
+async def test_in_non_admin_refused_no_job(monkeypatch):
+    """/in is admin-only. A non-admin user (even an active one) is refused before
+    anything is scheduled and before the subscription gate is consulted — no job,
+    no spend, no paywall."""
+    gate = AsyncMock()
+    monkeypatch.setattr(chat_mod.subscription_surface, "show_gate", gate)
+    monkeypatch.setattr(chat_mod.admin_surface, "is_admin_id", lambda _id: False)
+
+    user = _active_user()  # active, but not admin
+    upd = make_update("/in 5")
+    ctx = _make_in_context(user)
+    await chat_mod._cmd_in(upd, ctx, user)
+
+    assert not ctx.job_queue.jobs, "no job may be scheduled for a non-admin"
+    gate.assert_not_awaited()
+    assert upd.message.replies, "non-admin should get a refusal reply"
+    assert upd.message.replies[-1][0] == chat_mod.IN_ADMIN_ONLY

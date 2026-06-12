@@ -116,7 +116,22 @@ Compaction failure is non-fatal — chat continues with un-compacted state.
 
 `config/personalization.yaml` and `.env` are gitignored. Do not commit
 real values for `BOT_TOKEN`, `CHAT_ID`, `OPENROUTER_KEY`, `SUPABASE_*`,
-`HTTPS_PROXY`. Only the `*.example.yaml` template lives in the repo.
+`HTTPS_PROXY`. Only the `*.example.yaml` and `*.default.yaml` templates
+live in the repo.
+
+## Personalization privacy boundary (multi-tenant)
+
+`config/personalization.yaml` is the OWNER's private profile. It must
+never reach another tenant's prompt. The single resolver is
+`personalization.resolve_personalization(db_blob, tg_user_id)`:
+owner (env `CHAT_ID`) → private yaml; everyone else → committed neutral
+`config/personalization.default.yaml` deep-merged with their own
+`user_settings.personalization` overrides (the reserved `_usage`
+counter namespace is stripped, never treated as a profile).
+`ai.build_system_prompt` fails closed to the neutral default when no
+resolved config is passed. Do not add `load_personalization()` calls on
+any tenant-facing path, and never write `user_settings.personalization`
+without read-merge-write (the `_usage` counter lives in the same JSONB).
 
 ## License
 

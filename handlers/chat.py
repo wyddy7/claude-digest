@@ -30,6 +30,7 @@ from bot import (
 )
 from agent import run_chat_turn, clear_chat_thread
 from handlers.middleware import _effective_tier_active
+from handlers import admin as admin_surface
 from handlers import digest as digest_surface
 from handlers import history as history_surface
 from handlers import onboarding as onboarding_surface
@@ -48,6 +49,7 @@ from handlers.strings import (
     CHAT_LIMIT_HIT,
     CHAT_THINKING,
     FALLBACK,
+    IN_ADMIN_ONLY,
     ONBOARDING_MENU_READY as MENU_READY,
 )
 
@@ -89,7 +91,6 @@ async def _cmd_help(update: Update) -> None:
         "*Команды*\n\n"
         "/help — это сообщение\n"
         "/next — когда следующий дайджест и чекин\n"
-        "/in `<минуты>` — запустить дайджест через N минут (1–60)\n"
         "/clear — очистить историю диалога с ассистентом\n\n"
         "*Кнопки*\n\n"
         "📰 *Дайджест* — запустить сейчас\n"
@@ -120,7 +121,7 @@ async def _cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def _cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
     """Tenant-safe /stages: reads the caller's own settings row, not global state."""
     from pipeline_config import build_registry_from_state, describe_registry
-    from personalization import load_personalization
+    from personalization import resolve_personalization
 
     user_id = user["id"]
     settings = await db.load_settings(user_id)
@@ -129,7 +130,11 @@ async def _cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE, user: 
         "current_focus": settings.get("current_focus") or "",
         "model": settings.get("model") or db.DEFAULT_MODEL,
     }
-    cfg_yaml = await db.load_personalization_db(user_id) or load_personalization()
+    # Privacy boundary: owner → private yaml; tenants → neutral default +
+    # their own overrides (never the owner's yaml).
+    cfg_yaml = resolve_personalization(
+        settings.get("personalization"), user.get("tg_user_id")
+    )
     registry = build_registry_from_state(cfg_data, cfg_yaml)
     text = "🧩 <b>Модели по этапам пайплайна</b>\n\n" + escape(describe_registry(registry))
     await update.message.reply_text(text, parse_mode="HTML")
@@ -147,7 +152,12 @@ async def _require_active(update: Update, context: ContextTypes.DEFAULT_TYPE, us
 
 
 async def _cmd_in(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
-    """Tenant-safe /in <minutes>: schedules a per-user digest via job_queue."""
+    """/in <minutes>: schedule a one-off digest. ADMIN-ONLY — it's an unbounded
+    manual-spend power tool, so it's gated to the operator (ADMIN_ID), kept out
+    of the user /help and the command menu, and never offered to tenants."""
+    if not admin_surface.is_admin_id(user.get("tg_user_id")):
+        await update.message.reply_text(IN_ADMIN_ONLY)
+        return
     if not await _require_active(update, context, user):
         return
     raw = (update.message.text or "").strip()
@@ -168,7 +178,19 @@ async def _cmd_in(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict
 
     async def _job(ctx: ContextTypes.DEFAULT_TYPE):
         try:
-            await digest_surface.deliver_digest(ctx.bot, user)
+            # Re-check the subscription AT FIRE TIME (fail-closed): the gate at
+            # schedule time is not enough — the trial can expire or the admin
+            # can /revoke_pro within the up-to-60-minute delay, and the captured
+            # `user` dict would be stale. Refetch the row; missing/inactive → no
+            # LLM spend, just a silent skip (the user already lost access).
+            row = await db.get_user_by_tg_id(tg_user_id)
+            if not row or not _effective_tier_active(row):
+                logger.info(
+                    "scheduled /in digest for %s skipped: subscription inactive at fire time",
+                    tg_user_id,
+                )
+                return
+            await digest_surface.deliver_digest(ctx.bot, row)
         except Exception as exc:
             logger.warning("scheduled /in digest for %s failed: %s", tg_user_id, exc)
 
