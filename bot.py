@@ -156,16 +156,6 @@ def channels_kb(channels: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-async def check_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user and update.effective_user.id != OWNER_ID:
-        logger.warning(f"Unauthorized access attempt from user {update.effective_user.id}")
-        if update.callback_query:
-            await _safe_answer(update.callback_query, "⛔ Нет доступа", show_alert=True)
-        elif update.message:
-            await update.message.reply_text("⛔ Нет доступа")
-        raise ApplicationHandlerStop
-
-
 async def cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Read-only view of the per-stage model registry (which model runs each
     pipeline stage, and why). Metadata is sourced from the registry — the same

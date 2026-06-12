@@ -65,18 +65,22 @@ async def deliver_digest(bot, user: dict, *, on_status=None) -> int:
     date_str = dt.now(moscow).strftime("%d.%m.%Y")
     full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
 
-    # Reuse the scheduler's chunker so the 4096 split stays in one place.
-    from scheduler import _send_digest_chunks
+    from delivery import send_digest_chunks
 
-    await _send_digest_chunks(
+    await send_digest_chunks(
         bot, tg_user_id, full_text,
         result.get("personal_html", ""), result.get("stats_html", ""),
     )
 
-    await db.save_settings(user_id, {
+    saved = {
         "last_digest": digest_html,
         "last_digest_time": dt.now().isoformat(),
-    })
+    }
+    # Focus auto-reset after delivery (parity with the legacy owner path; this was
+    # silently missing for tenants). Cleared only when the user opted in.
+    if _settings.get("focus_auto_reset") and _settings.get("current_focus"):
+        saved["current_focus"] = ""
+    await db.save_settings(user_id, saved)
     return posts_count
 
 

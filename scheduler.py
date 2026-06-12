@@ -20,6 +20,7 @@ import db
 import subscriptions
 from agent import run_digest_pipeline
 from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
+from delivery import send_digest_chunks
 from personalization import load_personalization
 from pipeline_config import build_pipeline_config, make_openrouter_client
 
@@ -115,40 +116,6 @@ async def run_digest():
     logger.info(f"Scheduled digest done: {posts_count} posts")
 
 
-async def _send_digest_chunks(bot, chat_id: int, full_text: str,
-                              personal_html: str = "", stats_html: str = "") -> None:
-    """Chunk + send a digest to one chat (Telegram 4096-char limit). Shared by the
-    legacy single-tenant path and the multi-tenant fan-out."""
-    max_len = 4096
-    if len(full_text) <= max_len:
-        chunks = [full_text]
-    else:
-        chunks = []
-        current = ""
-        for para in full_text.split("\n\n"):
-            if len(current) + len(para) + 2 <= max_len:
-                current = current + ("\n\n" if current else "") + para
-            else:
-                if current:
-                    chunks.append(current)
-                while len(para) > max_len:
-                    chunks.append(para[:max_len])
-                    para = para[max_len:]
-                current = para
-        if current:
-            chunks.append(current)
-
-    for chunk in chunks:
-        await bot.send_message(chat_id, chunk, parse_mode="HTML", disable_web_page_preview=True)
-
-    personal_parts = [p for p in [personal_html, stats_html] if p]
-    if personal_parts:
-        await bot.send_message(
-            chat_id, "\n\n".join(personal_parts),
-            parse_mode="HTML", disable_web_page_preview=True,
-        )
-
-
 async def _deliver_user_digest(bot, user: dict) -> int:
     """Generate + deliver one user's digest using their own channels/settings/
     personalization. Returns posts_count. Per-user chat_id = the numeric
@@ -179,7 +146,7 @@ async def _deliver_user_digest(bot, user: dict) -> int:
     posts_count = result.get("posts_count", 0)
     date_str = dt.now(MOSCOW).strftime("%d.%m.%Y")
     full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
-    await _send_digest_chunks(
+    await send_digest_chunks(
         bot, tg_user_id, full_text,
         result.get("personal_html", ""), result.get("stats_html", ""),
     )
