@@ -89,7 +89,7 @@ async def test_scheduler_startup():
     from pathlib import Path
 
     proc = subprocess.Popen(
-        [sys.executable, "scheduler.py"],
+        [sys.executable, "-m", "digest_bot.scheduler"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
