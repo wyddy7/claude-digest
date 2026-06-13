@@ -8,7 +8,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
 
-from personalization import load_default_personalization
+from digest_bot.personalization import load_default_personalization
 
 logger = logging.getLogger(__name__)
 

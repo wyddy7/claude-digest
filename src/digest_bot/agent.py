@@ -22,12 +22,12 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
 
-import db
-import reader
-from ai import build_system_prompt, filter_ads, generate_digest, summarize_chat_history
-from personalization import load_personalization, resolve_personalization
-from pipeline_config import READ_MODE_AGENTIC, READ_MODE_EXTRACT
-from scraper import scrape_channel
+import digest_bot.db as db
+import digest_bot.reader as reader
+from digest_bot.ai import build_system_prompt, filter_ads, generate_digest, summarize_chat_history
+from digest_bot.personalization import load_personalization, resolve_personalization
+from digest_bot.pipeline_config import READ_MODE_AGENTIC, READ_MODE_EXTRACT
+from digest_bot.scraper import scrape_channel
 
 logger = logging.getLogger(__name__)
 

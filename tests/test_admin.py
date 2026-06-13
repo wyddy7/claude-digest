@@ -17,9 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import db as db_module
-import subscriptions as subs_module
-from handlers import admin as admin_surface
+import digest_bot.db as db_module
+import digest_bot.subscriptions as subs_module
+from digest_bot.handlers import admin as admin_surface
 
 
 # ─── in-memory DB shim ────────────────────────────────────────────────────────
@@ -455,7 +455,7 @@ def test_dedicated_commands_are_in_fallthrough_list():
     it into the chat agent and the command silently never fires. /stats hit
     exactly this bug: registered but eaten by chat until added here. This pins the
     invariant so a future dedicated command can't regress the same way."""
-    from handlers import middleware
+    from digest_bot.handlers import middleware
 
     dedicated = {"/buy", "/give_pro", "/revoke_pro", "/grant_trial", "/reset_user", "/stats"}
     missing = dedicated - set(middleware._FALLTHROUGH_COMMANDS)

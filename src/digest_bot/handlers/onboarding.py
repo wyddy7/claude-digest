@@ -15,18 +15,17 @@ loaded at import time — never hardcoded here. All user-facing strings are Russ
 
 import logging
 import re
-from pathlib import Path
-
 import yaml
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-import db
-import delivery
-import subscriptions
-from handlers.menu import main_kb_saas
-from handlers.middleware import _effective_tier_active
-from handlers.strings import (
+import digest_bot.db as db
+import digest_bot.delivery as delivery
+import digest_bot.subscriptions as subscriptions
+from digest_bot.paths import CONFIG_DIR
+from digest_bot.handlers.menu import main_kb_saas
+from digest_bot.handlers.middleware import _effective_tier_active
+from digest_bot.handlers.strings import (
     ONBOARDING_CHANNELS_MIN_ERROR,
     ONBOARDING_FOCUS,
     ONBOARDING_FOCUS_OWN_PROMPT,
@@ -54,7 +53,7 @@ _ENTRY_STATES = {ST_INVITED, ST_NEW}
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
 
 # ── topic seed (EDITABLE SEED DATA) ───────────────────────────────────────────
-_TOPICS_PATH = Path(__file__).resolve().parent.parent / "config" / "onboarding_topics.yaml"
+_TOPICS_PATH = CONFIG_DIR / "onboarding_topics.yaml"
 
 _TOPIC_LABELS = {
     # N3: only the curated, owner-verified AI/LLM set is offered.
@@ -451,7 +450,7 @@ async def _run_preview(update, context):
 
     N2: streams pipeline stage updates via make_status_updater, matching
     the live behaviour of the 📰 button (deliver_digest's on_status path)."""
-    from handlers.digest import deliver_digest
+    from digest_bot.handlers.digest import deliver_digest
 
     user = context.user_data["user"]
     chat = update.effective_chat
@@ -464,7 +463,7 @@ async def _run_preview(update, context):
     # flow the trial was granted at /start, so this always passes; an
     # expired/revoked/null-state user gets the paywall and NO pipeline run.
     if not _effective_tier_active(user):
-        from handlers import subscription as subscription_surface
+        from digest_bot.handlers import subscription as subscription_surface
 
         await subscription_surface.show_gate(update, context)
         # Channels are already saved — land the user in 'done' so /start shows

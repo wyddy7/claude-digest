@@ -14,10 +14,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from telegram import Bot
 
-import db
-import subscriptions
-from bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
-from logging_setup import setup_logging
+import digest_bot.db as db
+import digest_bot.subscriptions as subscriptions
+from digest_bot.bot import DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE
+from digest_bot.logging_setup import setup_logging
 
 load_dotenv()
 setup_logging("scheduler")
@@ -33,7 +33,7 @@ async def _deliver_user_digest(bot, user: dict) -> int:
     generator (handlers.digest.deliver_digest) so the cron fan-out, the 📰
     button, and the onboarding preview all run the exact same per-user path —
     no duplicated config-build/send/save logic."""
-    from handlers.digest import deliver_digest
+    from digest_bot.handlers.digest import deliver_digest
 
     return await deliver_digest(bot, user, source="cron")
 
@@ -93,7 +93,7 @@ async def run_checkin():
     user_settings, and delivers the check-in to their tg_user_id. The owner is a
     normal users row, so the fan-out covers them too.
     """
-    from handlers.checkin import run_checkin_fanout
+    from digest_bot.handlers.checkin import run_checkin_fanout
 
     await run_checkin_fanout(BOT_TOKEN)
     logger.info("Scheduled checkin fan-out complete")

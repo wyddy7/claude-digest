@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import db as db_module
+import digest_bot.db as db_module
 
 
 # ─── synthetic ids ────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ async def test_delete_user_rows_missing_user_returns_false(monkeypatch):
 @pytest.mark.asyncio
 async def test_fanout_skips_user_when_daily_cap_reached():
     """run_digest_fanout skips a user who has already received digests_per_day today."""
-    import scheduler as sched_module
+    import digest_bot.scheduler as sched_module
 
     user = {
         "id": _USER_ID,
@@ -200,16 +200,16 @@ async def test_fanout_skips_user_when_daily_cap_reached():
 
     with (
         patch.object(db_module, "list_active_users", _fake_list_active_users),
-        patch("scheduler.subscriptions.is_subscription_active", _fake_is_sub_active),
-        patch("scheduler.db.get_effective_limit", _fake_get_effective_limit),
-        patch("scheduler.db.count_user_digests_today", _fake_count_today),
-        patch("scheduler._deliver_user_digest", _fake_deliver),
+        patch("digest_bot.scheduler.subscriptions.is_subscription_active", _fake_is_sub_active),
+        patch("digest_bot.scheduler.db.get_effective_limit", _fake_get_effective_limit),
+        patch("digest_bot.scheduler.db.count_user_digests_today", _fake_count_today),
+        patch("digest_bot.scheduler._deliver_user_digest", _fake_deliver),
     ):
         # Provide a fake Bot context manager.
         mock_bot = AsyncMock()
         mock_bot.__aenter__ = AsyncMock(return_value=mock_bot)
         mock_bot.__aexit__ = AsyncMock(return_value=False)
-        with patch("scheduler.Bot", return_value=mock_bot):
+        with patch("digest_bot.scheduler.Bot", return_value=mock_bot):
             await sched_module.run_digest_fanout()
 
     # No delivery should have happened (cap reached).
@@ -219,7 +219,7 @@ async def test_fanout_skips_user_when_daily_cap_reached():
 @pytest.mark.asyncio
 async def test_fanout_delivers_when_under_daily_cap():
     """run_digest_fanout delivers when today's count is below digests_per_day."""
-    import scheduler as sched_module
+    import digest_bot.scheduler as sched_module
 
     user = {
         "id": _USER_ID,
@@ -249,15 +249,15 @@ async def test_fanout_delivers_when_under_daily_cap():
 
     with (
         patch.object(db_module, "list_active_users", _fake_list_active_users),
-        patch("scheduler.subscriptions.is_subscription_active", _fake_is_sub_active),
-        patch("scheduler.db.get_effective_limit", _fake_get_effective_limit),
-        patch("scheduler.db.count_user_digests_today", _fake_count_today),
-        patch("scheduler._deliver_user_digest", _fake_deliver),
+        patch("digest_bot.scheduler.subscriptions.is_subscription_active", _fake_is_sub_active),
+        patch("digest_bot.scheduler.db.get_effective_limit", _fake_get_effective_limit),
+        patch("digest_bot.scheduler.db.count_user_digests_today", _fake_count_today),
+        patch("digest_bot.scheduler._deliver_user_digest", _fake_deliver),
     ):
         mock_bot = AsyncMock()
         mock_bot.__aenter__ = AsyncMock(return_value=mock_bot)
         mock_bot.__aexit__ = AsyncMock(return_value=False)
-        with patch("scheduler.Bot", return_value=mock_bot):
+        with patch("digest_bot.scheduler.Bot", return_value=mock_bot):
             await sched_module.run_digest_fanout()
 
     assert len(delivered) == 1, f"Expected 1 delivery but got {len(delivered)}"
@@ -266,7 +266,7 @@ async def test_fanout_delivers_when_under_daily_cap():
 @pytest.mark.asyncio
 async def test_fanout_delivers_when_no_cap_set():
     """run_digest_fanout delivers when digests_per_day is None (no limit set)."""
-    import scheduler as sched_module
+    import digest_bot.scheduler as sched_module
 
     user = {
         "id": _USER_ID,
@@ -294,15 +294,15 @@ async def test_fanout_delivers_when_no_cap_set():
 
     with (
         patch.object(db_module, "list_active_users", _fake_list_active_users),
-        patch("scheduler.subscriptions.is_subscription_active", _fake_is_sub_active),
-        patch("scheduler.db.get_effective_limit", _fake_get_effective_limit),
-        patch("scheduler.db.count_user_digests_today", _fake_count_today),
-        patch("scheduler._deliver_user_digest", _fake_deliver),
+        patch("digest_bot.scheduler.subscriptions.is_subscription_active", _fake_is_sub_active),
+        patch("digest_bot.scheduler.db.get_effective_limit", _fake_get_effective_limit),
+        patch("digest_bot.scheduler.db.count_user_digests_today", _fake_count_today),
+        patch("digest_bot.scheduler._deliver_user_digest", _fake_deliver),
     ):
         mock_bot = AsyncMock()
         mock_bot.__aenter__ = AsyncMock(return_value=mock_bot)
         mock_bot.__aexit__ = AsyncMock(return_value=False)
-        with patch("scheduler.Bot", return_value=mock_bot):
+        with patch("digest_bot.scheduler.Bot", return_value=mock_bot):
             await sched_module.run_digest_fanout()
 
     assert len(delivered) == 1, "Expected delivery when no cap is configured"
@@ -348,7 +348,7 @@ def _active_user(**kw) -> dict:
 async def test_manual_digest_capped_for_active_user(monkeypatch):
     """An active (non-owner) user pressing 📰 after hitting digests_per_day gets the
     cap message and the pipeline never runs (no LLM spend)."""
-    from handlers import digest as digest_mod
+    from digest_bot.handlers import digest as digest_mod
 
     delivered: list = []
 
@@ -364,14 +364,14 @@ async def test_manual_digest_capped_for_active_user(monkeypatch):
     await digest_mod.send_digest(upd, ctx)
 
     assert delivered == [], "pipeline must NOT run when the daily cap is reached"
-    from handlers.strings import DIGEST_DAILY_CAP
+    from digest_bot.handlers.strings import DIGEST_DAILY_CAP
     assert upd.effective_message.replies == [DIGEST_DAILY_CAP]
 
 
 @pytest.mark.asyncio
 async def test_manual_digest_owner_exempt_from_cap(monkeypatch):
     """The owner is exempt from the manual cap — testing isn't blocked even at cap."""
-    from handlers import digest as digest_mod
+    from digest_bot.handlers import digest as digest_mod
 
     delivered: list = []
 
@@ -392,7 +392,7 @@ async def test_manual_digest_owner_exempt_from_cap(monkeypatch):
 @pytest.mark.asyncio
 async def test_manual_digest_delivers_under_cap(monkeypatch):
     """Under the daily cap, a normal active user's 📰 runs the pipeline."""
-    from handlers import digest as digest_mod
+    from digest_bot.handlers import digest as digest_mod
 
     delivered: list = []
 

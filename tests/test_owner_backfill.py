@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import db as db_module
+import digest_bot.db as db_module
 
 # Synthetic owner id — never a real telegram id.
 _OWNER_TG_ID = 111111111

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-import handlers.strings as S
-import handlers.menu as menu
+import digest_bot.handlers.strings as S
+import digest_bot.handlers.menu as menu
 
 
 # ── re-export consistency ─────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ def test_sub_payment_duplicate_key():
 def test_onboarding_module_aliases():
     """WELCOME_TEXT / FOCUS_TEXT / PREVIEW_* in onboarding.py must resolve to
     the same strings.py values (they are aliases, not independent copies)."""
-    from handlers import onboarding as onb
+    from digest_bot.handlers import onboarding as onb
 
     assert onb.WELCOME_TEXT == S.ONBOARDING_WELCOME
     assert onb.FOCUS_TEXT == S.ONBOARDING_FOCUS
@@ -95,6 +95,6 @@ def test_onboarding_module_aliases():
 
 def test_middleware_invite_only_alias():
     """INVITE_ONLY_TEXT in middleware.py must resolve to strings.INVITE_ONLY."""
-    from handlers import middleware as mw
+    from digest_bot.handlers import middleware as mw
 
     assert mw.INVITE_ONLY_TEXT == S.INVITE_ONLY

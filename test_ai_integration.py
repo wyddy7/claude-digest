@@ -10,10 +10,14 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-from bs4 import BeautifulSoup
-from scraper import _extract_image_urls
+# Run as a plain script from repo root — ensure the src-layout package is importable
+# even without an editable install on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from ai import (
+from bs4 import BeautifulSoup
+from digest_bot.scraper import _extract_image_urls
+
+from digest_bot.ai import (
     AdBatchResult,
     DigestResult,
     PostAdLabel,
@@ -24,7 +28,7 @@ from ai import (
     _to_html_stats,
     build_system_prompt,
 )
-from personalization import load_personalization
+from digest_bot.personalization import load_personalization
 
 PASS = []
 FAIL = []
@@ -207,49 +211,64 @@ except Exception as e:
     traceback.print_exc()
 
 
-print("\n[7] Dockerfile: all local .py modules are COPYed")
+print("\n[7] Dockerfile: src-layout package is shipped, installed, and entrypoint resolves")
 try:
-    import ast
-    import re as _re
+    import importlib
 
-    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
-    # Extract filenames from COPY lines
-    copied_files: set[str] = set()
-    for line in dockerfile.splitlines():
-        line = line.strip()
-        if line.startswith("COPY "):
-            parts = line.split()
-            # last token is destination, everything before is source
-            for f in parts[1:-1]:
-                copied_files.add(f)
+    repo_root = Path(__file__).resolve().parent
+    dockerfile = (repo_root / "Dockerfile").read_text(encoding="utf-8")
+    copy_lines = [ln.strip() for ln in dockerfile.splitlines() if ln.strip().startswith("COPY ")]
 
-    # Collect all local .py files referenced as imports across copied app modules
-    local_modules = {f.stem for f in Path(".").glob("*.py") if not f.name.startswith("test_")}
-    app_sources = [f for f in copied_files if f.endswith(".py")]
+    # The whole package tree ships via `COPY src/ ...` — not a per-file enumeration.
+    copies_src = any(_part == "src/" or _part.startswith("src/")
+                     for ln in copy_lines for _part in ln.split()[1:-1])
+    check("dockerfile_copies_src_tree", copies_src,
+          "Dockerfile must `COPY src/ src/` so the digest_bot package ships")
 
-    missing = []
-    for src in app_sources:
-        src_path = Path(src)
-        if not src_path.exists():
-            continue
-        source = src_path.read_text(encoding="utf-8", errors="replace")
-        # NB: \s* leading match so LAZY imports inside functions (indented, e.g.
-        # `    import pricing` in db.py) are also checked — a top-of-line-only regex
-        # silently missed pricing.py and broke /stats in prod (deploy 85b152f).
-        for m in _re.finditer(r"^\s*(?:from|import)\s+(\w+)", source, _re.MULTILINE):
-            mod = m.group(1)
-            if mod in local_modules and f"{mod}.py" not in copied_files:
-                missing.append(f"{mod}.py (imported by {src})")
-
-    check("dockerfile_copies_all_local_imports", len(missing) == 0,
-          f"missing: {missing}" if missing else "")
-
-    # config/ directory must be copied so example yaml is available as fallback
-    has_config_copy = any(
-        "config" in p for p in copied_files
-    )
-    check("dockerfile_copies_config_dir", has_config_copy,
+    # config/ stays at repo root and must be copied (bind-mount overlays it in prod,
+    # but the committed templates are the fallback when the mount is empty).
+    copies_config = any("config" in _part
+                        for ln in copy_lines for _part in ln.split()[1:-1])
+    check("dockerfile_copies_config_dir", copies_config,
           "add 'COPY config/ config/' to Dockerfile")
+
+    # The project itself must be installed (so `python -m digest_bot.bot` resolves),
+    # not just its deps. The deps-only layer uses --no-install-project; a later
+    # `uv sync --no-dev` (without that flag) installs the package.
+    installs_project = any(
+        ln.strip().startswith("RUN uv sync") and "--no-install-project" not in ln
+        for ln in dockerfile.splitlines()
+    )
+    check("dockerfile_installs_project", installs_project,
+          "Dockerfile must run `uv sync --no-dev --frozen` (no --no-install-project) "
+          "after copying src/ so the package is installed")
+
+    # Entrypoint must invoke the package module form, not a flat script path.
+    check("dockerfile_cmd_is_module", "digest_bot.bot" in dockerfile,
+          "CMD must be `python -m digest_bot.bot`")
+
+    # Every module that lives under src/digest_bot must actually import under the
+    # digest_bot namespace — this is the real protection: a module dropped from the
+    # package, or a leftover flat import, surfaces here. (src is on sys.path from the
+    # insert at the top of this file.)
+    pkg_dir = repo_root / "src" / "digest_bot"
+    # `models` is a migration-only SQLAlchemy schema (sqlalchemy is BANNED in the
+    # bot runtime per CLAUDE.md and is not a runtime dependency — alembic runs it
+    # via `uv run --with sqlalchemy`). The bot never imports it, so exclude it from
+    # the runtime-importability check.
+    _MIGRATION_ONLY = {"models"}
+    pkg_modules = sorted(
+        p.stem for p in pkg_dir.glob("*.py")
+        if p.name != "__init__.py" and p.stem not in _MIGRATION_ONLY
+    )
+    unimportable = []
+    for mod in pkg_modules:
+        try:
+            importlib.import_module(f"digest_bot.{mod}")
+        except Exception as ie:  # noqa: BLE001 — we want the module name + reason
+            unimportable.append(f"{mod} ({type(ie).__name__}: {ie})")
+    check("package_modules_all_importable", len(unimportable) == 0,
+          f"unimportable: {unimportable}" if unimportable else "")
 except Exception as e:
     FAIL.append("dockerfile_check")
     print(f"  FAIL  dockerfile_check: {e}")
@@ -320,7 +339,7 @@ except Exception as e:
 
 print("\n[11] _matches_query: fuzzy-token digest search")
 try:
-    from agent import _matches_query
+    from digest_bot.agent import _matches_query
 
     digest_text = (
         "ai_newz [04.05.2026]\n"
@@ -357,7 +376,7 @@ except Exception as e:
 
 print("\n[10] _find_safe_cut: chat compaction boundary logic")
 try:
-    from agent import _find_safe_cut
+    from digest_bot.agent import _find_safe_cut
     from langchain_core.messages import (
         AIMessage,
         HumanMessage,
@@ -416,7 +435,7 @@ except Exception as e:
 
 print("\n[12] _extract_external_urls: provenance allowlist")
 try:
-    from scraper import _extract_external_urls
+    from digest_bot.scraper import _extract_external_urls
 
     html = """
     <div class="tgme_widget_message">
@@ -473,8 +492,8 @@ try:
     import asyncio
     import json as _json
 
-    from ai import filter_ads, generate_digest
-    from pipeline_config import build_pipeline_config, PipelineConfig, StageModel
+    from digest_bot.ai import filter_ads, generate_digest
+    from digest_bot.pipeline_config import build_pipeline_config, PipelineConfig, StageModel
 
     cfg_yaml = load_personalization()
 
@@ -498,7 +517,7 @@ try:
           build_pipeline_config({}, {}).read_mode == "off")
 
     # --- P3: all four stages resolve with metadata ---
-    from pipeline_config import build_registry_from_state, describe_registry, stage_from_yaml
+    from digest_bot.pipeline_config import build_registry_from_state, describe_registry, stage_from_yaml
     reg = build_registry_from_state({"model": "user/m"}, cfg_yaml)
     check("p3_four_stages_resolve",
           {"digest", "ad_filter", "triage", "summarize_link"} <= set(reg.keys()))
@@ -605,7 +624,7 @@ try:
           any(c["model"] == "digest/model" for c in fake.chat.completions.calls))
 
     # --- end-to-end pipeline wiring (empty channels → no network/LLM) ---
-    from agent import run_digest_pipeline
+    from digest_bot.agent import run_digest_pipeline
     fake2 = FakeLLMClient(_fake_responder)
     result = asyncio.run(run_digest_pipeline(
         cfg, db_module=FakeDB(channels=[]), llm_client=fake2, fetcher=None
@@ -644,14 +663,14 @@ try:
     import asyncio
     import json as _json
 
-    from reader import (
+    from digest_bot.reader import (
         ENGINE,
         extract_content,
         read_posts,
         resolve_one_hop,
         triage_links,
     )
-    from pipeline_config import build_pipeline_config
+    from digest_bot.pipeline_config import build_pipeline_config
 
     check("p4_engine_is_grade_a", ENGINE == "grade_a")
 
@@ -749,7 +768,7 @@ except Exception as e:
 
 print("\n[14b] reader: real-world golden fixture (offline regression anchor)")
 try:
-    from reader import EXTRACT_CHAR_BUDGET, extract_content as _extract_content
+    from digest_bot.reader import EXTRACT_CHAR_BUDGET, extract_content as _extract_content
 
     fixture = Path(__file__).parent / "tests" / "fixtures" / "article_paulgraham_ds.html"
     real_html = fixture.read_text(encoding="utf-8", errors="replace")
@@ -776,9 +795,9 @@ try:
     import asyncio
     import json as _json
 
-    import db as _db
-    from reader import read_posts as _read_posts
-    from pipeline_config import PipelineConfig, build_registry_from_state
+    import digest_bot.db as _db
+    from digest_bot.reader import read_posts as _read_posts
+    from digest_bot.pipeline_config import PipelineConfig, build_registry_from_state
 
     # _url_hash is stable + collision-free for distinct urls
     check("p5_url_hash_stable", _db._url_hash("https://a.com/x") == _db._url_hash("https://a.com/x"))
@@ -867,8 +886,8 @@ except Exception as e:
 
 print("\n[18] cost + extraction instrumentation: cost_summary")
 try:
-    from agent import _build_cost_summary
-    from ai import record_usage
+    from digest_bot.agent import _build_cost_summary
+    from digest_bot.ai import record_usage
 
     class _Cfg:
         def __init__(self, rm): self.read_mode = rm
@@ -910,7 +929,7 @@ try:
     check("p6_record_usage_appends", len(log) == 1 and log[0]["prompt_tokens"] == 7)
 
     # OpenRouter authoritative cost: usage.cost captured straight off the response
-    import pricing
+    import digest_bot.pricing as pricing
     class _UCost:
         prompt_tokens = 10; completion_tokens = 5; cost = 0.0042
     class _RCost: usage = _UCost()
@@ -940,8 +959,8 @@ except Exception as e:
 print("\n[19] read_mode=agentic (Grade B) raises — no silent fallthrough")
 try:
     import asyncio
-    from agent import run_digest_pipeline as _rdp
-    from pipeline_config import PipelineConfig, build_registry_from_state
+    from digest_bot.agent import run_digest_pipeline as _rdp
+    from digest_bot.pipeline_config import PipelineConfig, build_registry_from_state
 
     class _MsgX:
         def __init__(self, c): self.content = c

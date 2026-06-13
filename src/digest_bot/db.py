@@ -411,7 +411,7 @@ async def record_digest_cost(
     the denormalized total (cheap column SUM for the dashboard), payload keeps the
     full per-stage / per-model breakdown + read_mode + is_error + source."""
     try:
-        import pricing
+        import digest_bot.pricing as pricing
         priced = pricing.price_cost_summary(cost_summary or {})
         total = priced.get("total_cost_usd", 0.0)
         payload = {
@@ -475,7 +475,7 @@ def build_dashboard(events: list[dict], subs: list[dict], users: list[dict],
                     *, now: datetime, days: int) -> dict:
     """Pure aggregation (no IO) over already-fetched rows → 4-tier dashboard.
     Split out from aggregate_stats so it is unit-testable offline."""
-    import pricing
+    import digest_bot.pricing as pricing
     econ_cutoff = now - timedelta(days=days)
 
     def in_econ(row) -> bool:

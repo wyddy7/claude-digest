@@ -19,26 +19,26 @@ import pytz
 from telegram import Update
 from telegram.ext import ContextTypes
 
-import db
+import digest_bot.db as db
 # Schedule is single-sourced in bot.py (same import checkin.py uses) — never
 # re-hardcode the hours here.
-from bot import (
+from digest_bot.bot import (
     DIGEST_HOUR as _DIGEST_HOUR,
     DIGEST_MINUTE as _DIGEST_MINUTE,
     CHECKIN_HOUR as _CHECKIN_HOUR,
     CHECKIN_MINUTE as _CHECKIN_MINUTE,
 )
-from agent import run_chat_turn, clear_chat_thread
-from handlers.middleware import _effective_tier_active
-from handlers import admin as admin_surface
-from handlers import digest as digest_surface
-from handlers import history as history_surface
-from handlers import onboarding as onboarding_surface
-from handlers import profile as profile_surface
-from handlers import settings as settings_surface
-from handlers import subscription as subscription_surface
-from handlers.menu import main_kb_saas
-from handlers.strings import (
+from digest_bot.agent import run_chat_turn, clear_chat_thread
+from digest_bot.handlers.middleware import _effective_tier_active
+from digest_bot.handlers import admin as admin_surface
+from digest_bot.handlers import digest as digest_surface
+from digest_bot.handlers import history as history_surface
+from digest_bot.handlers import onboarding as onboarding_surface
+from digest_bot.handlers import profile as profile_surface
+from digest_bot.handlers import settings as settings_surface
+from digest_bot.handlers import subscription as subscription_surface
+from digest_bot.handlers.menu import main_kb_saas
+from digest_bot.handlers.strings import (
     BTN_DIGEST,
     BTN_HISTORY,
     BTN_PROFILE,
@@ -120,8 +120,8 @@ async def _cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def _cmd_stages(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
     """Tenant-safe /stages: reads the caller's own settings row, not global state."""
-    from pipeline_config import build_registry_from_state, describe_registry
-    from personalization import resolve_personalization
+    from digest_bot.pipeline_config import build_registry_from_state, describe_registry
+    from digest_bot.personalization import resolve_personalization
 
     user_id = user["id"]
     settings = await db.load_settings(user_id)

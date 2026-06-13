@@ -4,11 +4,13 @@ WORKDIR /app
 
 RUN pip install uv --no-cache-dir
 
+# Layer 1: dependencies only (cached unless pyproject/lock change)
 COPY pyproject.toml uv.lock ./
+RUN uv sync --no-install-project --no-dev --frozen
+
+# Layer 2: the package + runtime config, then install the project itself
+COPY src/ src/
+COPY config/ config/
 RUN uv sync --no-dev --frozen
 
-COPY bot.py scraper.py ai.py personalization.py scheduler.py agent.py db.py models.py pipeline_config.py reader.py subscriptions.py delivery.py logging_setup.py pricing.py ./
-COPY handlers/ handlers/
-COPY config/ config/
-
-CMD ["uv", "run", "bot.py"]
+CMD ["uv", "run", "python", "-m", "digest_bot.bot"]

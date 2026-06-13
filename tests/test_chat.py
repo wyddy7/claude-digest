@@ -24,10 +24,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import agent as agent_mod
-import db as db_module
-from handlers import chat as chat_mod
-from handlers.strings import CHAT_LIMIT_HIT
+import digest_bot.agent as agent_mod
+import digest_bot.db as db_module
+from digest_bot.handlers import chat as chat_mod
+from digest_bot.handlers.strings import CHAT_LIMIT_HIT
 
 USER_A = "uuid-user-a"
 USER_B = "uuid-user-b"

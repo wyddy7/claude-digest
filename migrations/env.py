@@ -11,7 +11,7 @@ try:
 except ImportError:
     pass
 
-from models import Base  # noqa: E402 — after dotenv load
+from digest_bot.models import Base  # noqa: E402 — after dotenv load
 
 config = context.config
 

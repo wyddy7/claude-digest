@@ -14,4 +14,4 @@ services:
       - .env
     volumes:
       - ./config:/app/config
-    command: ["uv", "run", "scheduler.py"]
+    command: ["uv", "run", "python", "-m", "digest_bot.scheduler"]

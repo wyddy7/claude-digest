@@ -22,11 +22,11 @@ import asyncio
 
 import pytest
 
-import agent
-import db as db_module
-import personalization as pers
-from ai import build_system_prompt
-from pipeline_config import build_pipeline_config
+import digest_bot.agent as agent
+import digest_bot.db as db_module
+import digest_bot.personalization as pers
+from digest_bot.ai import build_system_prompt
+from digest_bot.pipeline_config import build_pipeline_config
 
 OWNER_TG_ID = 111111111
 TENANT_TG_ID = 222222222

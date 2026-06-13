@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import db
+import digest_bot.db as db
 
 logger = logging.getLogger(__name__)
 

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-CONFIG_DIR = Path(__file__).parent / "config"
+from digest_bot.paths import CONFIG_DIR
 PERSONALIZATION_FILE = CONFIG_DIR / "personalization.yaml"
 PERSONALIZATION_EXAMPLE_FILE = CONFIG_DIR / "personalization.example.yaml"
 PERSONALIZATION_DEFAULT_FILE = CONFIG_DIR / "personalization.default.yaml"

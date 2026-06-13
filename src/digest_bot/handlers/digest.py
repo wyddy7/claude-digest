@@ -14,12 +14,12 @@ import os
 
 import httpx
 
-import db
-from agent import run_digest_pipeline
-from handlers.middleware import requires_tier
-from handlers.strings import DIGEST_COLLECTING, DIGEST_DAILY_CAP, DIGEST_ERROR
-from personalization import is_owner, resolve_personalization
-from pipeline_config import build_pipeline_config, make_openrouter_client
+import digest_bot.db as db
+from digest_bot.agent import run_digest_pipeline
+from digest_bot.handlers.middleware import requires_tier
+from digest_bot.handlers.strings import DIGEST_COLLECTING, DIGEST_DAILY_CAP, DIGEST_ERROR
+from digest_bot.personalization import is_owner, resolve_personalization
+from digest_bot.pipeline_config import build_pipeline_config, make_openrouter_client
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ async def deliver_digest(bot, user: dict, *, on_status=None, source: str = "manu
     date_str = dt.now(moscow).strftime("%d.%m.%Y")
     full_text = f"📰 <b>Дайджест {date_str}</b>\n\n{digest_html}"
 
-    from delivery import send_digest_chunks
+    from digest_bot.delivery import send_digest_chunks
 
     await send_digest_chunks(
         bot, tg_user_id, full_text,
