@@ -39,13 +39,17 @@ These are fixed — do not introduce alternatives without an explicit reason:
 Run **before** every push to `master`:
 
 ```bash
-uv run python test_ai_integration.py    # offline, ~5 sec, must be 100% pass
+uv run pytest -q                         # offline, ~1 sec, 185 tests, must be green
+uv run python test_ai_integration.py     # offline, ~5 sec, must be 100% pass
 ```
 
-Covers schema/render/Dockerfile completeness/scraper/ad-filter/chat
-compaction boundary logic. Section [10] specifically protects the chat
-context compaction — if you touch `_find_safe_cut` or message reducer
-behavior, run it first.
+`pytest` (suite in `tests/`) covers handlers, multi-tenant pipeline,
+payments/subscriptions, onboarding, settings, chat, history, admin,
+cron limits, personalization privacy. `test_ai_integration.py` covers
+schema/render/Dockerfile completeness/scraper/ad-filter/chat compaction
+boundary logic. Section [10] specifically protects the chat context
+compaction — if you touch `_find_safe_cut` or message reducer behavior,
+run it first.
 
 `test_smoke.py` is **not** part of the pre-push gate — requires live
 `OPENROUTER_KEY` / `BOT_TOKEN` / Supabase credentials. Run only when
@@ -57,8 +61,10 @@ debugging end-to-end behavior locally.
 
 1. Docker build (cached layers).
 2. Import check (every module imports without crashing).
-3. `uv run python test_ai_integration.py`.
-4. Optionally `test_smoke.py` if secrets are configured.
+3. `uv run pytest -q` — the full offline suite in `tests/` (185 tests).
+4. Scraper test (live public channel, no credentials).
+5. `uv run python test_ai_integration.py`.
+6. Optionally `test_smoke.py` if secrets are configured.
 
 `.github/workflows/deploy.yml` deploys after tests pass.
 

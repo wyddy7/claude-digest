@@ -54,6 +54,9 @@ jobs:
       - name: Import check
         run: uv run python -c "import bot; import ai; import scraper; import agent; import db; print('imports OK')"
 
+      - name: Pytest suite (offline, no credentials)
+        run: uv run pytest -q
+
       - name: Scraper test (public, no credentials)
         run: |
           uv run python -c "
