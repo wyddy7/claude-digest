@@ -21,9 +21,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import db as db_module
-from handlers import history as history_mod
-from handlers.strings import (
+import digest_bot.db as db_module
+from digest_bot.handlers import history as history_mod
+from digest_bot.handlers.strings import (
     HISTORY_EMPTY,
     HISTORY_NOT_FOUND,
     HISTORY_TRUNCATED_SUFFIX,

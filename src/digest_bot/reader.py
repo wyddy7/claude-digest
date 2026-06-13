@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import trafilatura
 from bs4 import BeautifulSoup
 
-from ai import _parse_llm_json, record_usage
+from digest_bot.ai import _parse_llm_json, record_usage
 
 logger = logging.getLogger(__name__)
 

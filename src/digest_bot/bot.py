@@ -22,8 +22,8 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-import db
-from logging_setup import setup_logging
+import digest_bot.db as db
+from digest_bot.logging_setup import setup_logging
 
 load_dotenv()
 setup_logging("bot")
@@ -126,13 +126,13 @@ def main():
     # the same path. Callbacks (onb|/buy|/s|/h|/ci_) fall through to their
     # dedicated CallbackQueryHandlers; payment + admin COMMANDS fall through to
     # their CommandHandlers (see _FALLTHROUGH_COMMANDS in handlers/middleware).
-    from handlers.middleware import resolve_user
-    from handlers import onboarding as onboarding_surface
-    from handlers import subscription as subscription_surface
-    from handlers import admin as admin_surface
-    from handlers import settings as settings_surface
-    from handlers import history as history_surface
-    from handlers.checkin import cb_checkin as checkin_cb
+    from digest_bot.handlers.middleware import resolve_user
+    from digest_bot.handlers import onboarding as onboarding_surface
+    from digest_bot.handlers import subscription as subscription_surface
+    from digest_bot.handlers import admin as admin_surface
+    from digest_bot.handlers import settings as settings_surface
+    from digest_bot.handlers import history as history_surface
+    from digest_bot.handlers.checkin import cb_checkin as checkin_cb
 
     app.add_handler(TypeHandler(Update, resolve_user), group=-1)
 

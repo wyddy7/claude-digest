@@ -19,9 +19,9 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
-import db
-import subscriptions
-from handlers.strings import INVITE_ONLY
+import digest_bot.db as db
+import digest_bot.subscriptions as subscriptions
+from digest_bot.handlers.strings import INVITE_ONLY
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +61,8 @@ async def resolve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         return
     if update.message:
-        from handlers import onboarding as onboarding_surface
-        from handlers import chat as chat_surface
+        from digest_bot.handlers import onboarding as onboarding_surface
+        from digest_bot.handlers import chat as chat_surface
 
         # Payment + admin surfaces have their own CommandHandlers in bot.py — let
         # the Stars success service message and these commands fall through to
@@ -123,7 +123,7 @@ def requires_tier(level: str):
                 return await handler(update, context)
 
             # Gated: route to the paywall (lazy import avoids a cycle).
-            from handlers import subscription as subscription_surface
+            from digest_bot.handlers import subscription as subscription_surface
 
             await subscription_surface.show_gate(update, context)
             return None

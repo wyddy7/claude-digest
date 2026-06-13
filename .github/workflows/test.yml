@@ -52,7 +52,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Import check
-        run: uv run python -c "import bot; import ai; import scraper; import agent; import db; print('imports OK')"
+        run: uv run python -c "import digest_bot.bot; import digest_bot.ai; import digest_bot.scraper; import digest_bot.agent; import digest_bot.db; print('imports OK')"
 
       - name: Pytest suite (offline, no credentials)
         run: uv run pytest -q
@@ -61,7 +61,7 @@ jobs:
         run: |
           uv run python -c "
           import asyncio
-          from scraper import scrape_channel
+          from digest_bot.scraper import scrape_channel
 
           async def main():
               posts = await scrape_channel('cryptoEssay', hours_back=48)

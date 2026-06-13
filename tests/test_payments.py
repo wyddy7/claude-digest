@@ -25,9 +25,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import db as db_module
-import subscriptions as subs_module
-from handlers import subscription as sub_surface
+import digest_bot.db as db_module
+import digest_bot.subscriptions as subs_module
+from digest_bot.handlers import subscription as sub_surface
 
 
 # ─── in-memory DB shim (mirrors tests/test_subscriptions.py FakeDB surface) ────

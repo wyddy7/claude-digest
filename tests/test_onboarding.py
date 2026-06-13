@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import db as db_module
-import subscriptions as subs_module
-from handlers import middleware as mw
-from handlers import onboarding as onb
+import digest_bot.db as db_module
+import digest_bot.subscriptions as subs_module
+from digest_bot.handlers import middleware as mw
+from digest_bot.handlers import onboarding as onb
 
 OWNER = 111111111
 USER = 222222222
@@ -96,7 +96,7 @@ async def test_owner_flows_through_unified_path(monkeypatch):
     message into the chat router (no is_owner flag anywhere)."""
     owner_row = {"id": "uuid-owner", "tg_user_id": OWNER, "onboarding_state": "done"}
     monkeypatch.setattr(db_module, "get_user_by_tg_id", AsyncMock(return_value=owner_row))
-    from handlers import chat as chat_surface
+    from digest_bot.handlers import chat as chat_surface
     route = AsyncMock()
     monkeypatch.setattr(chat_surface, "route_text", route)
 
@@ -133,7 +133,7 @@ async def test_requires_tier_allows_active_trial():
 @pytest.mark.asyncio
 async def test_requires_tier_gates_expired(monkeypatch):
     gate = AsyncMock()
-    import handlers.subscription as sub
+    import digest_bot.handlers.subscription as sub
     monkeypatch.setattr(sub, "show_gate", gate)
     calls = []
 
@@ -361,7 +361,7 @@ async def test_run_preview_passes_on_status(monkeypatch):
         captured["on_status"] = on_status
         return 3  # posts_count
 
-    with patch("handlers.digest.deliver_digest", fake_deliver):
+    with patch("digest_bot.handlers.digest.deliver_digest", fake_deliver):
         ctx = FakeContext()
         # Active trial — the preview gate must pass for the normal first-touch
         # flow (trial granted at /start, preview runs moments later).
@@ -388,7 +388,7 @@ async def test_preview_expired_user_blocked_no_llm(monkeypatch):
     must hit the paywall — deliver_digest (the LLM pipeline) is never invoked,
     and the user lands in 'done' so the wizard can't be looped for free digests."""
     from unittest.mock import patch
-    import handlers.subscription as sub_module
+    import digest_bot.handlers.subscription as sub_module
 
     async def _must_not_run(*a, **k):
         raise AssertionError("deliver_digest invoked for an expired user (LLM spend leak)")
@@ -398,7 +398,7 @@ async def test_preview_expired_user_blocked_no_llm(monkeypatch):
     monkeypatch.setattr(sub_module, "show_gate", gate)
     monkeypatch.setattr(db_module, "update_user_fields", upd_fields)
 
-    with patch("handlers.digest.deliver_digest", _must_not_run):
+    with patch("digest_bot.handlers.digest.deliver_digest", _must_not_run):
         ctx = FakeContext()
         # Trial ended yesterday, no pro_until → inactive. Fail-closed also covers
         # the null/missing-timestamps row (same falsy branch).
@@ -421,7 +421,7 @@ async def test_preview_null_subscription_fails_closed(monkeypatch):
     """A row with NO subscription timestamps at all (ambiguous state) must DENY
     the preview — fail-closed is the contract for every LLM surface."""
     from unittest.mock import patch
-    import handlers.subscription as sub_module
+    import digest_bot.handlers.subscription as sub_module
 
     async def _must_not_run(*a, **k):
         raise AssertionError("deliver_digest invoked with null subscription state")
@@ -430,7 +430,7 @@ async def test_preview_null_subscription_fails_closed(monkeypatch):
     monkeypatch.setattr(sub_module, "show_gate", gate)
     monkeypatch.setattr(db_module, "update_user_fields", AsyncMock())
 
-    with patch("handlers.digest.deliver_digest", _must_not_run):
+    with patch("digest_bot.handlers.digest.deliver_digest", _must_not_run):
         ctx = FakeContext()
         ctx.user_data["user"] = {"id": "uuid-1", "tg_user_id": USER}
         upd = make_update()

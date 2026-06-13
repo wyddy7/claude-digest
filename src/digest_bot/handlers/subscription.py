@@ -21,9 +21,9 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
-import db
-import subscriptions
-from handlers.strings import (
+import digest_bot.db as db
+import digest_bot.subscriptions as subscriptions
+from digest_bot.handlers.strings import (
     SUB_BUY_BODY_HEADER,
     SUB_BUY_DISCOUNT,
     SUB_BUY_WALLET_TIP,

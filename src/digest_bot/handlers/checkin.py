@@ -21,9 +21,9 @@ import logging
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-import db
-import subscriptions
-from handlers.strings import (
+import digest_bot.db as db
+import digest_bot.subscriptions as subscriptions
+from digest_bot.handlers.strings import (
     CHECKIN_BTN_NO,
     CHECKIN_BTN_TALK,
     CHECKIN_BTN_YES,
@@ -125,7 +125,7 @@ async def cb_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     state (last_digest, chat mode) is read from the per-user DB row resolved by
     the middleware (context.user_data["user"]).
     """
-    from bot import DIGEST_HOUR, DIGEST_MINUTE  # schedule constants live in bot.py
+    from digest_bot.bot import DIGEST_HOUR, DIGEST_MINUTE  # schedule constants live in bot.py
 
     q = update.callback_query
     action = q.data

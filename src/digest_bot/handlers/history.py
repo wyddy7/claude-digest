@@ -13,8 +13,8 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-import db
-from handlers.strings import (
+import digest_bot.db as db
+from digest_bot.handlers.strings import (
     HISTORY_EMPTY,
     HISTORY_HEADER_TEMPLATE,
     HISTORY_NOT_FOUND,

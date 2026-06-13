@@ -20,7 +20,7 @@ OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 
 async def test_scraper():
     print("scraper: cryptoEssay...", end=" ")
-    from scraper import scrape_channel
+    from digest_bot.scraper import scrape_channel
 
     posts = await scrape_channel("cryptoEssay", hours_back=72)
     assert isinstance(posts, list)
@@ -31,7 +31,7 @@ async def test_scraper():
 
 async def test_ai_digest(posts):
     print("ai.generate_digest...", end=" ")
-    from ai import generate_digest
+    from digest_bot.ai import generate_digest
 
     data = {
         "current_focus": "",
@@ -54,7 +54,7 @@ async def test_ai_digest(posts):
 
 async def test_filter_images(posts, digest):
     print("ai.filter_images...", end=" ")
-    from ai import filter_images
+    from digest_bot.ai import filter_images
 
     raw = [p["image_bytes"] for p in posts if p.get("image_bytes")]
     if not raw:
@@ -71,7 +71,7 @@ async def test_bot_startup():
     from pathlib import Path
 
     result = subprocess.run(
-        [sys.executable, "-c", "import bot; print('imports ok')"],
+        [sys.executable, "-c", "import digest_bot.bot; print('imports ok')"],
         capture_output=True,
         text=True,
         cwd=str(Path(__file__).parent),
@@ -89,7 +89,7 @@ async def test_scheduler_startup():
     from pathlib import Path
 
     proc = subprocess.Popen(
-        [sys.executable, "scheduler.py"],
+        [sys.executable, "-m", "digest_bot.scheduler"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

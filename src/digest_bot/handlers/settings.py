@@ -19,9 +19,9 @@ import re
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-import db
-from handlers.menu import main_kb_saas
-from handlers.strings import (
+import digest_bot.db as db
+from digest_bot.handlers.menu import main_kb_saas
+from digest_bot.handlers.strings import (
     BTN_DIGEST,
     BTN_HISTORY,
     BTN_PROFILE,

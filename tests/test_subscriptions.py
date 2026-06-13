@@ -15,9 +15,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-import db as db_module
-import subscriptions as subs_module
-from subscriptions import (
+import digest_bot.db as db_module
+import digest_bot.subscriptions as subs_module
+from digest_bot.subscriptions import (
     PaymentResult,
     apply_successful_payment,
     grant_trial,
@@ -587,7 +587,7 @@ async def test_apply_payment_quarter_grants_correct_days(fdb):
 async def test_buy_text_renders_html_strike_and_discount(monkeypatch):
     """Paywall anchors render as HTML <s> (the message is HTML — Markdown ~~ would
     show literal tildes) and the discount line appears; charged prices unchanged."""
-    import handlers.subscription as sub
+    import digest_bot.handlers.subscription as sub
 
     vals = {
         ("pro", "price_month_stars"): 900,

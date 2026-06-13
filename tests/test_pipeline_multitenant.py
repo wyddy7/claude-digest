@@ -10,8 +10,8 @@ import asyncio
 
 import pytest
 
-import agent
-from pipeline_config import build_pipeline_config
+import digest_bot.agent as agent
+from digest_bot.pipeline_config import build_pipeline_config
 
 
 def test_build_pipeline_config_carries_per_user_inputs():

@@ -18,7 +18,7 @@ All wording is identical to the original; this is a mechanical extraction.
 # ── menu button labels (re-exported from handlers/menu.py as the canonical home) ──
 # NOTE: menu.py still defines these; strings.py re-exports so callers that want
 # only labels can import from a single module without pulling in telegram types.
-from handlers.menu import (  # noqa: F401  re-export
+from digest_bot.handlers.menu import (  # noqa: F401  re-export
     BTN_DIGEST,
     BTN_HISTORY,
     BTN_PROFILE,

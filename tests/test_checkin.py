@@ -21,10 +21,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import db as db_module
-import subscriptions as subs_module
-from handlers import checkin as checkin_mod
-from handlers.strings import (
+import digest_bot.db as db_module
+import digest_bot.subscriptions as subs_module
+from digest_bot.handlers import checkin as checkin_mod
+from digest_bot.handlers.strings import (
     CHECKIN_NO_EMPTY,
     CHECKIN_NO_PREFIX,
     CHECKIN_TALK_PROMPT,
@@ -78,7 +78,7 @@ async def test_fanout_sends_to_active_users(monkeypatch):
 
     fake_bot = _make_fake_bot()
 
-    with patch("handlers.checkin.Bot", return_value=fake_bot):
+    with patch("digest_bot.handlers.checkin.Bot", return_value=fake_bot):
         await checkin_mod.run_checkin_fanout("fake-token")
 
     assert fake_bot.send_message.call_count == 2
@@ -101,7 +101,7 @@ async def test_fanout_skips_inactive_user_and_warns(monkeypatch):
 
     fake_bot = _make_fake_bot()
 
-    with patch("handlers.checkin.Bot", return_value=fake_bot):
+    with patch("digest_bot.handlers.checkin.Bot", return_value=fake_bot):
         await checkin_mod.run_checkin_fanout("fake-token")
 
     fake_bot.send_message.assert_not_called()
@@ -114,7 +114,7 @@ async def test_fanout_no_users_returns_early(monkeypatch):
     monkeypatch.setattr(db_module, "list_active_users", AsyncMock(return_value=[]))
 
     bot_cls_mock = MagicMock()
-    with patch("handlers.checkin.Bot", bot_cls_mock):
+    with patch("digest_bot.handlers.checkin.Bot", bot_cls_mock):
         await checkin_mod.run_checkin_fanout("fake-token")
 
     bot_cls_mock.assert_not_called()
@@ -142,7 +142,7 @@ async def test_fanout_isolates_failing_user(monkeypatch):
     monkeypatch.setattr(db_module, "load_settings", _load_settings_raising)
 
     fake_bot = _make_fake_bot()
-    with patch("handlers.checkin.Bot", return_value=fake_bot):
+    with patch("digest_bot.handlers.checkin.Bot", return_value=fake_bot):
         await checkin_mod.run_checkin_fanout("fake-token")
 
     # Only user B should have received a message (A raised, was isolated).
@@ -164,7 +164,7 @@ async def test_fanout_uses_per_user_focus(monkeypatch):
     monkeypatch.setattr(db_module, "load_settings", AsyncMock(side_effect=lambda uid: settings_by_id[uid]))
 
     fake_bot = _make_fake_bot()
-    with patch("handlers.checkin.Bot", return_value=fake_bot):
+    with patch("digest_bot.handlers.checkin.Bot", return_value=fake_bot):
         await checkin_mod.run_checkin_fanout("fake-token")
 
     # Both messages sent; the one for user A must contain "LLM evals" in the text.

@@ -25,10 +25,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import db as db_module
-import subscriptions as subs_module
-from handlers import middleware as mw
-from handlers import onboarding as onb
+import digest_bot.db as db_module
+import digest_bot.subscriptions as subs_module
+from digest_bot.handlers import middleware as mw
+from digest_bot.handlers import onboarding as onb
 
 # ── synthetic ids (never real user data) ──────────────────────────────────────
 INVITED_USER = 222222222
@@ -387,7 +387,7 @@ async def test_full_wizard_walk_topic_focus_preview(fdb, monkeypatch):
 
     # ── Step 3: focus skip → triggers _run_preview → deliver_digest called ─────
     deliver_mock = AsyncMock(return_value=5)  # simulate 5 posts returned
-    with patch("handlers.digest.deliver_digest", deliver_mock):
+    with patch("digest_bot.handlers.digest.deliver_digest", deliver_mock):
         ctx.user_data["user"] = copy.deepcopy(fdb.users[INVITED_USER])
         # Update the user dict to reflect the channels saved in settings.
         fdb.user_settings[str(INVITED_USER)]["channels"] = TEST_CHANNELS
@@ -422,7 +422,7 @@ async def test_preview_not_triggered_if_no_channels(fdb, monkeypatch):
     advance to ST_FOCUS (so the preview is never triggered)."""
     _seed_invited(fdb, INVITED_USER, onboarding_state=onb.ST_CHANNELS)
     deliver_mock = AsyncMock()
-    with patch("handlers.digest.deliver_digest", deliver_mock):
+    with patch("digest_bot.handlers.digest.deliver_digest", deliver_mock):
         ctx = FakeContext()
         ctx.user_data["user"] = copy.deepcopy(fdb.users[INVITED_USER])
         ctx.user_data["onb_channels"] = []
@@ -451,15 +451,15 @@ async def test_expired_trial_shows_paywall_no_pipeline(fdb, monkeypatch):
     gate_mock = AsyncMock()
 
     # Patch the paywall show_gate so we can assert it fires.
-    import handlers.subscription as sub_surface
+    import digest_bot.handlers.subscription as sub_surface
     monkeypatch.setattr(sub_surface, "show_gate", gate_mock)
     # Also patch run_digest_pipeline in case the gate ever failed to block.
-    with patch("agent.run_digest_pipeline", pipeline_mock):
+    with patch("digest_bot.agent.run_digest_pipeline", pipeline_mock):
         ctx = FakeContext()
         ctx.user_data["user"] = copy.deepcopy(fdb.users[INVITED_USER])
         upd = _make_update(text="/start")
 
-        from handlers.digest import send_digest
+        from digest_bot.handlers.digest import send_digest
         await send_digest(upd, ctx)
 
     # The paywall show_gate must have fired.
@@ -478,16 +478,16 @@ async def test_active_trial_does_not_hit_paywall(fdb, monkeypatch):
     fdb.user_settings[str(INVITED_USER)]["channels"] = ["test_chan"]
 
     gate_mock = AsyncMock()
-    import handlers.subscription as sub_surface
+    import digest_bot.handlers.subscription as sub_surface
     monkeypatch.setattr(sub_surface, "show_gate", gate_mock)
 
     deliver_mock = AsyncMock(return_value=3)
-    with patch("handlers.digest.deliver_digest", deliver_mock):
+    with patch("digest_bot.handlers.digest.deliver_digest", deliver_mock):
         ctx = FakeContext()
         ctx.user_data["user"] = copy.deepcopy(fdb.users[INVITED_USER])
         upd = _make_update(text="📰")
 
-        from handlers.digest import send_digest
+        from digest_bot.handlers.digest import send_digest
         await send_digest(upd, ctx)
 
     # Paywall must NOT fire.

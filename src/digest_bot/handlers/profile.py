@@ -7,8 +7,8 @@ limit rows (db.get_effective_limit) — never Python constants.
 from datetime import datetime, timezone
 from html import escape
 
-import db
-import subscriptions
+import digest_bot.db as db
+import digest_bot.subscriptions as subscriptions
 
 
 async def show_profile(update, context):

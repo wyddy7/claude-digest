@@ -26,8 +26,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import db as db_module
-from handlers import settings as settings_mod
+import digest_bot.db as db_module
+from digest_bot.handlers import settings as settings_mod
 
 USER_ID = "uuid-test-user"
 TG_USER_ID = 222222222

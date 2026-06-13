@@ -13,7 +13,7 @@ Commands (admin only; non-admins are silently ignored so the surface is invisibl
                                     users + user_settings rows entirely.
 
 Arguments are NUMERIC tg_user_ids only — never a @username. All limits/dates come
-from subscriptions.py (DB tier defaults), never Python constants.
+from digest_bot.subscriptions.py (DB tier defaults), never Python constants.
 """
 
 import logging
@@ -22,9 +22,9 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 
-import db
-import subscriptions
-from handlers.strings import (
+import digest_bot.db as db
+import digest_bot.subscriptions as subscriptions
+from digest_bot.handlers.strings import (
     ADMIN_RESET_USER_FULL_OK,
     ADMIN_RESET_USER_NOT_FOUND,
     ADMIN_RESET_USER_OK,

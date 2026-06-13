@@ -3,6 +3,18 @@
 > Project-local instructions for AI coding agents. Read before changing
 > code in this repo.
 
+## Layout
+
+`src/digest_bot/` package (src-layout). All bot modules (`bot.py`,
+`scheduler.py`, `agent.py`, `ai.py`, `db.py`, `handlers/`, …) live under
+`src/digest_bot/`; imports are absolute `digest_bot.*`. `config/`,
+`migrations/`, `alembic.ini`, `pyproject.toml`, `Dockerfile`,
+`docker-compose.yml` stay at the repo root. Entry points run as modules:
+`python -m digest_bot.bot` / `python -m digest_bot.scheduler`. The package
+is installed (hatchling, `[build-system]`); tests resolve via
+`pyproject [tool.pytest] pythonpath = ["src"]`. Config paths are anchored
+to the repo root by `digest_bot/paths.py` (not `Path(__file__)` math).
+
 ## Stack lock
 
 These are fixed — do not introduce alternatives without an explicit reason:
