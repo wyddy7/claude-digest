@@ -21,13 +21,20 @@ Why not psycopg?
   supabase-py uses httpx (same library as PTB) — no separate event loop.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import httpx
 from supabase import AsyncClient, create_async_client
+
+try:  # AsyncClientOptions carries the postgrest read-timeout; guard import-shape
+    from supabase.lib.client_options import AsyncClientOptions
+except Exception:  # pragma: no cover
+    AsyncClientOptions = None  # type: ignore[assignment, misc]
 
 try:
     from postgrest.exceptions import APIError
@@ -50,6 +57,37 @@ DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
 
 _client: Optional[AsyncClient] = None
 
+# Cap the postgrest read timeout well below supabase-py's 120s default. The
+# homelab → Supabase path intermittently PMTU-blackholes LARGE responses on one
+# of Supabase's two backend IPs: the read then stalls for the full timeout while
+# the OTHER IP returns in <1s. 120s = a 2-minute zombie hang per bad hit; 15s
+# fails fast so _retry can re-issue on a fresh connection (usually the good IP).
+_POSTGREST_TIMEOUT_S = 15
+
+# Transient transport faults worth retrying (read timeouts, conn resets, etc.).
+_DB_RETRY_ERRORS = (httpx.TimeoutException, httpx.TransportError)
+
+
+async def _retry(thunk, *, attempts: int = 4, what: str = "db"):
+    """Re-issue a Supabase query on transient transport/timeout faults.
+
+    Each attempt MUST rebuild+resend the request (pass a thunk, not a prebuilt
+    coroutine) so a fresh connection is drawn from the pool — the whole point,
+    since the stall is per-connection (one dead backend IP). Use ONLY for reads
+    (idempotent); a write that times out may have committed, so retrying it
+    risks a duplicate."""
+    last: Optional[BaseException] = None
+    for i in range(attempts):
+        try:
+            return await thunk()
+        except _DB_RETRY_ERRORS as e:
+            last = e
+            logger.warning("[db] %s transient %s (attempt %d/%d) — retrying",
+                           what, type(e).__name__, i + 1, attempts)
+            await asyncio.sleep(0.5 * i)  # brief backoff; attempt 0 is immediate
+    assert last is not None
+    raise last
+
 
 # ─── connection lifecycle ─────────────────────────────────────────────────────
 
@@ -61,9 +99,17 @@ async def init_pool(dsn: str) -> None:
 async def init_supabase(url: str, key: str) -> None:
     """Create async supabase client and verify connectivity."""
     global _client
-    _client = await create_async_client(url, key)
-    # Verify connectivity
-    resp = await _client.table("user_state").select("id").eq("id", 1).execute()
+    if AsyncClientOptions is not None:
+        _client = await create_async_client(
+            url, key, AsyncClientOptions(postgrest_client_timeout=_POSTGREST_TIMEOUT_S)
+        )
+    else:  # pragma: no cover - older supabase-py without AsyncClientOptions
+        _client = await create_async_client(url, key)
+    # Verify connectivity (retried — startup must survive a single bad-IP hit).
+    resp = await _retry(
+        lambda: _client.table("user_state").select("id").eq("id", 1).execute(),
+        what="init_supabase",
+    )
     logger.info(f"DB connection verified (supabase-py HTTP, rows={len(resp.data)})")
 
 
@@ -137,10 +183,10 @@ def _row_to_state(row: dict) -> dict:
 
 async def load_history(limit: int = 0) -> list[dict]:
     """Load digest history. limit=0 means all, newest first."""
-    q = _get_client().table("digests").select("*").order("id", desc=True)
-    if limit:
-        q = q.limit(limit)
-    resp = await q.execute()
+    def _q():
+        q = _get_client().table("digests").select("*").order("id", desc=True)
+        return (q.limit(limit) if limit else q).execute()
+    resp = await _retry(_q, what="load_history")  # large digest_html payload
     rows = resp.data or []
     if limit:
         return list(reversed(rows))
@@ -181,15 +227,15 @@ async def load_user_history(user_id: str, limit: int = 0) -> list[dict]:
     """Load digest history for a single tenant (user_id), newest first.
     limit=0 means all rows. Filtered by user_id so tenants never see each
     other's digests. Uses the idx_digests_user_id_id index from migration 003."""
-    q = (
-        _get_client().table("digests")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("id", desc=True)
-    )
-    if limit:
-        q = q.limit(limit)
-    resp = await q.execute()
+    def _q():
+        q = (
+            _get_client().table("digests")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("id", desc=True)
+        )
+        return (q.limit(limit) if limit else q).execute()
+    resp = await _retry(_q, what="load_user_history")  # large digest_html payload
     return resp.data or []
 
 
@@ -790,7 +836,12 @@ async def list_active_users() -> list[dict]:
     """SELECT users WHERE is_active = true. The scheduler iterates these and, per
     user, checks is_subscription_active / tier gates before delivery. is_active is
     the operational on/off switch, NOT the subscription state."""
-    resp = await _get_client().table("users").select("*").eq("is_active", True).execute()
+    # Fan-out entry point — retried so one bad-IP hit can't crash the whole
+    # daily digest (the original 2026-06-25 outage was this call dying outright).
+    resp = await _retry(
+        lambda: _get_client().table("users").select("*").eq("is_active", True).execute(),
+        what="list_active_users",
+    )
     return resp.data or []
 
 
