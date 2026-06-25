@@ -4,6 +4,15 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    # Supabase is a separate service, reachable directly — it must NOT ride the
+    # flaky Telegram HTTPS_PROXY. PTB passes the proxy to httpx explicitly, so
+    # NO_PROXY does not affect Telegram; it only exempts the env-implicit proxy
+    # that supabase-py (httpx, trust_env=True) would otherwise inherit. Without
+    # this, one proxy 502 blip kills any DB call (e.g. the scheduler's
+    # list_active_users → whole digest fan-out crashes). See db.py docstring.
+    environment:
+      - NO_PROXY=.supabase.co
+      - no_proxy=.supabase.co
     volumes:
       - ./config:/app/config
 
@@ -12,6 +21,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - NO_PROXY=.supabase.co
+      - no_proxy=.supabase.co
     volumes:
       - ./config:/app/config
     command: ["uv", "run", "python", "-m", "digest_bot.scheduler"]

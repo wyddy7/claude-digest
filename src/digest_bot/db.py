@@ -1,15 +1,24 @@
 """
 Database layer using supabase-py HTTP client (PostgREST REST API).
 
-Uses HTTPS → goes through HTTPS_PROXY → avoids libpq/psycopg SSL deadlock
-with PTB's httpx event loop. All functions are async and compatible with
-PTB's run_polling() event loop context.
+Async httpx client — compatible with PTB's run_polling() event loop context.
+
+Proxy boundary (important):
+  Supabase is a SEPARATE service and is reachable DIRECTLY. It must NOT ride
+  the Telegram HTTPS_PROXY, which is flaky — one 502 blip on the proxy would
+  otherwise kill any DB call (e.g. the scheduler's list_active_users → whole
+  digest fan-out crashes; happened 2026-06-25). supabase-py uses httpx with
+  trust_env=True, so it would inherit HTTPS_PROXY implicitly; we exempt it via
+  `NO_PROXY=.supabase.co` (set in docker-compose.yml). PTB passes the proxy to
+  httpx EXPLICITLY for Telegram, so NO_PROXY does not affect Telegram polling.
+  supabase-py's ClientOptions exposes no httpx-client injection in this version,
+  so NO_PROXY is the surgical lever rather than a per-client trust_env=False.
 
 Why not psycopg?
   psycopg.connect() inside PTB's run_polling() handler hangs on SSL handshake
   when httpx (PTB) already holds an active SSL tunnel through HTTPS_PROXY.
   TCP connect succeeds (0.10s) but psycopg's full SSL/auth sequence deadlocks.
-  supabase-py uses httpx (same library as PTB) — works through proxy natively.
+  supabase-py uses httpx (same library as PTB) — no separate event loop.
 """
 
 import hashlib
