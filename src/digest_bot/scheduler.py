@@ -82,7 +82,11 @@ async def run_digest_fanout():
                 posts_count = await _deliver_user_digest(bot, user)
                 logger.info(f"Fan-out: delivered to {tg_user_id} ({posts_count} posts)")
             except Exception as e:
-                logger.warning(f"Fan-out: user {tg_user_id} failed (isolated): {e}")
+                # %r + exc_info: empty-message exceptions (httpx.ReadTimeout has
+                # str()=='') logged a bare ': ' that hid the cause (2026-06-26).
+                logger.warning(
+                    "Fan-out: user %s failed (isolated): %r", tg_user_id, e, exc_info=True
+                )
 
 
 async def run_checkin():

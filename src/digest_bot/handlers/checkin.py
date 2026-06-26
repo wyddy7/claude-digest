@@ -102,7 +102,11 @@ async def run_checkin_fanout(bot_token: str) -> None:
                 await send_checkin(bot, tg_user_id, focus)
                 logger.info("checkin fan-out: sent to %d", tg_user_id)
             except Exception as exc:
-                logger.warning("checkin fan-out: user %d failed (isolated): %s", tg_user_id, exc)
+                # %r + exc_info so empty-message exceptions (e.g. httpx.ReadTimeout)
+                # still record their type and traceback instead of a bare ': '.
+                logger.warning(
+                    "checkin fan-out: user %d failed (isolated): %r", tg_user_id, exc, exc_info=True
+                )
 
 
 # ─── PTB callback handlers ────────────────────────────────────────────────────

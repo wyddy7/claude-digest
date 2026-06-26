@@ -11,8 +11,15 @@ Proxy boundary (important):
   trust_env=True, so it would inherit HTTPS_PROXY implicitly; we exempt it via
   `NO_PROXY=.supabase.co` (set in docker-compose.yml). PTB passes the proxy to
   httpx EXPLICITLY for Telegram, so NO_PROXY does not affect Telegram polling.
-  supabase-py's ClientOptions exposes no httpx-client injection in this version,
-  so NO_PROXY is the surgical lever rather than a per-client trust_env=False.
+  NO_PROXY is the surgical lever (no need to re-wire auth headers on a custom
+  client) even though supabase-py 2.28 does expose ClientOptions.httpx_client.
+
+Keepalive boundary (important):
+  After the client is created we swap the PostgREST httpx session for a
+  no-keepalive one (_disable_keepalive). The homelab → Supabase path silently
+  drops idle keepalive sockets; reusing one then hangs until timeout. Forcing a
+  fresh connection per request removes the failure at the source. See
+  init_supabase() and _disable_keepalive().
 
 Why not psycopg?
   psycopg.connect() inside PTB's run_polling() handler hangs on SSL handshake
@@ -58,10 +65,14 @@ DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
 _client: Optional[AsyncClient] = None
 
 # Cap the postgrest read timeout well below supabase-py's 120s default. The
-# homelab → Supabase path intermittently PMTU-blackholes LARGE responses on one
-# of Supabase's two backend IPs: the read then stalls for the full timeout while
-# the OTHER IP returns in <1s. 120s = a 2-minute zombie hang per bad hit; 15s
-# fails fast so _retry can re-issue on a fresh connection (usually the good IP).
+# homelab → Supabase path silently drops idle keepalive connections; httpx then
+# hangs on the next reuse of that half-open socket until the read timeout. 15s
+# fails fast (vs a 2-minute zombie hang) so _retry can re-issue on a FRESH
+# connection. The structural fix is _disable_keepalive() — no socket is kept to
+# go stale; this timeout + _retry are the safety net under it.
+# (Earlier framing blamed a per-IP PMTU blackhole — DISPROVEN 2026-06-26: both
+#  Supabase backend IPs are clean on fresh sockets; the fault is keepalive reuse,
+#  reproduced as a deterministic 10/20-timeout alternation, 0/20 fresh.)
 _POSTGREST_TIMEOUT_S = 15
 
 # Transient transport faults worth retrying (read timeouts, conn resets, etc.).
@@ -96,6 +107,38 @@ async def init_pool(dsn: str) -> None:
     logger.debug("init_pool: no-op (use init_supabase)")
 
 
+async def _disable_keepalive(client: AsyncClient) -> None:
+    """Force a fresh TCP connection per PostgREST request (no keepalive reuse).
+
+    The homelab → Supabase path silently drops IDLE keepalive connections
+    (NAT/pooler idle-eviction over the host's WiFi link). httpx doesn't notice
+    the half-open socket, so the NEXT request reusing it hangs until the read
+    timeout — deterministic ~50% of cron-path calls (verified 2026-06-26: raw
+    pooled calls timed out 10/20, perfectly alternating; the same calls on a
+    fresh connection succeeded 20/20). A fresh connection ALWAYS works, so we
+    keep none alive.
+
+    Swaps the lazily-built postgrest httpx session for an identically-configured
+    one with max_keepalive_connections=0. Best-effort — if a supabase-py upgrade
+    changes these internals, _retry() still recovers by drawing a fresh
+    connection on the next attempt, so a failure here is non-fatal."""
+    try:
+        pg = client.postgrest  # lazy-inits session (base_url + auth headers ready post-create)
+        old = pg.session
+        pg.session = httpx.AsyncClient(
+            base_url=old.base_url,
+            headers=old.headers,
+            timeout=old.timeout,
+            follow_redirects=True,
+            http2=True,
+            limits=httpx.Limits(max_keepalive_connections=0),
+        )
+        await old.aclose()
+        logger.info("[db] postgrest keepalive disabled — fresh connection per request")
+    except Exception as e:  # pragma: no cover - defensive; _retry is the net
+        logger.warning("[db] could not disable keepalive (non-fatal, _retry covers): %r", e)
+
+
 async def init_supabase(url: str, key: str) -> None:
     """Create async supabase client and verify connectivity."""
     global _client
@@ -105,7 +148,9 @@ async def init_supabase(url: str, key: str) -> None:
         )
     else:  # pragma: no cover - older supabase-py without AsyncClientOptions
         _client = await create_async_client(url, key)
-    # Verify connectivity (retried — startup must survive a single bad-IP hit).
+    # Remove the stale-keepalive failure at the source (see _disable_keepalive).
+    await _disable_keepalive(_client)
+    # Verify connectivity (retried — startup must survive a single transient hit).
     resp = await _retry(
         lambda: _client.table("user_state").select("id").eq("id", 1).execute(),
         what="init_supabase",
@@ -297,8 +342,9 @@ def _is_unique_violation(err: Exception) -> bool:
 
 async def get_user_by_tg_id(tg_user_id: int) -> Optional[dict]:
     """SELECT the user row by numeric tg_user_id. None if absent."""
-    resp = await (
-        _get_client().table("users").select("*").eq("tg_user_id", tg_user_id).execute()
+    resp = await _retry(
+        lambda: _get_client().table("users").select("*").eq("tg_user_id", tg_user_id).execute(),
+        what="get_user_by_tg_id",
     )
     rows = resp.data or []
     return rows[0] if rows else None
@@ -346,8 +392,9 @@ async def get_or_create_user(tg_user_id: int) -> dict:
 async def load_settings(user_id: str) -> dict:
     """SELECT user_settings by UUID user_id. Raises if missing
     (get_or_create_user guarantees the paired row)."""
-    resp = await (
-        _get_client().table("user_settings").select("*").eq("user_id", user_id).execute()
+    resp = await _retry(
+        lambda: _get_client().table("user_settings").select("*").eq("user_id", user_id).execute(),
+        what="load_settings",
     )
     rows = resp.data or []
     if not rows:
@@ -689,7 +736,10 @@ async def get_effective_limit(user_id: str, key: str, fallback: Any = None) -> A
         return overrides[key]
 
     # Resolve the user's tier, then that tier's default for the key.
-    resp = await _get_client().table("users").select("tier").eq("id", user_id).execute()
+    resp = await _retry(
+        lambda: _get_client().table("users").select("tier").eq("id", user_id).execute(),
+        what="get_effective_limit",
+    )
     rows = resp.data or []
     if rows:
         tier_limits = await get_tier_limits(rows[0]["tier"])
@@ -981,12 +1031,13 @@ async def count_user_digests_today(user_id: str) -> int:
     the manual 📰 cap to enforce digests_per_day without a separate counter
     column — the digests table is the authoritative source."""
     today = _digest_day_msk()
-    resp = await (
-        _get_client().table("digests")
+    resp = await _retry(
+        lambda: _get_client().table("digests")
         .select("id", count="exact")
         .eq("user_id", user_id)
         .eq("date", today)
-        .execute()
+        .execute(),
+        what="count_user_digests_today",
     )
     # PostgREST returns the count in resp.count when count="exact" is set.
     # Fall back to len(resp.data) if the attribute is absent (version delta).
