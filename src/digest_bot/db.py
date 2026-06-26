@@ -83,10 +83,10 @@ async def _retry(thunk, *, attempts: int = 4, what: str = "db"):
     """Re-issue a Supabase query on transient transport/timeout faults.
 
     Each attempt MUST rebuild+resend the request (pass a thunk, not a prebuilt
-    coroutine) so a fresh connection is drawn from the pool — the whole point,
-    since the stall is per-connection (one dead backend IP). Use ONLY for reads
-    (idempotent); a write that times out may have committed, so retrying it
-    risks a duplicate."""
+    coroutine) so a fresh connection is drawn — the whole point, since the stall
+    is per-connection (a stale keepalive socket; _disable_keepalive() removes the
+    source, this is the net). Use ONLY for reads (idempotent); a write that times
+    out may have committed, so retrying it risks a duplicate."""
     last: Optional[BaseException] = None
     for i in range(attempts):
         try:
@@ -886,8 +886,8 @@ async def list_active_users() -> list[dict]:
     """SELECT users WHERE is_active = true. The scheduler iterates these and, per
     user, checks is_subscription_active / tier gates before delivery. is_active is
     the operational on/off switch, NOT the subscription state."""
-    # Fan-out entry point — retried so one bad-IP hit can't crash the whole
-    # daily digest (the original 2026-06-25 outage was this call dying outright).
+    # Fan-out entry point — retried so a single transient timeout can't crash the
+    # whole daily digest (the original 2026-06-25 outage was this call dying outright).
     resp = await _retry(
         lambda: _get_client().table("users").select("*").eq("is_active", True).execute(),
         what="list_active_users",
