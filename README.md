@@ -61,7 +61,7 @@ tiered Russian-language digest with per-source fairness and a short "more" tail.
 - **Subscriptions**: 3-day Pro trial, then Telegram Stars (XTR) payments with an
   idempotent payment ledger. Access is always computed at runtime from
   `pro_until` / `trial_ends_at`.
-- **Scheduler**: a daily fan-out (13:00 MSK) delivers each active user their own
+- **Scheduler**: a daily fan-out (11:00 MSK) delivers each active user their own
   digest; a check-in fan-out (18:00 MSK) nudges engagement.
 
 ## Architecture

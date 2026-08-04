@@ -51,7 +51,7 @@ def _mask_proxy(url: str | None) -> str:
 
 # Schedule — single source of truth for both bot.py and scheduler.py. Imported
 # by scheduler.py and handlers/checkin.py — keep here.
-DIGEST_HOUR, DIGEST_MINUTE = 13, 0
+DIGEST_HOUR, DIGEST_MINUTE = 11, 0
 CHECKIN_HOUR, CHECKIN_MINUTE = 18, 0
 
 
