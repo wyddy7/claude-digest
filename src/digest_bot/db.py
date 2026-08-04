@@ -60,7 +60,10 @@ class DuplicateCharge(Exception):
     caller treats this as 'charge already processed', not a DB outage."""
 
 DEFAULT_CHANNELS = ["cryptoEssay", "llm_notes", "ai_newz", "y_everyday", "eaccchat"]
-DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
+# Must be a model OpenRouter currently serves — a retired id 404s on the very
+# first digest of every new user (claude-3.5-haiku was retired 2026-02-19 and
+# sat here until 2026-08-04).
+DEFAULT_MODEL = "anthropic/claude-sonnet-5"
 
 _client: Optional[AsyncClient] = None
 
@@ -379,9 +382,15 @@ async def get_or_create_user(tg_user_id: int) -> dict:
     # then individually overridable per user).
     trial_limits = await get_tier_limits("trial")
     try:
+        # `model` MUST be written explicitly. Omitting it lets Postgres apply the
+        # column server_default from migration 003, which pins a model id frozen
+        # at schema-creation time — that is how every new user ended up on the
+        # retired claude-3.5-haiku (404 on their first digest). DEFAULT_MODEL is
+        # the single source of truth; the column default is now dead weight.
         await client.table("user_settings").insert({
             "user_id": user["id"],
             "limits": trial_limits,
+            "model": DEFAULT_MODEL,
         }).execute()
     except Exception as e:
         if not (APIError is not None and isinstance(e, APIError) and _is_unique_violation(e)):

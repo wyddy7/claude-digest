@@ -13,7 +13,7 @@ read_mode: "off"
 # Change here to switch a stage's model without touching code.
 models:
   # Bare-string form (back-compat).
-  chat: "anthropic/claude-sonnet-4.6"      # conversational chat agent
+  chat: "anthropic/claude-sonnet-5"      # conversational chat agent
   digest: "deepseek/deepseek-chat"         # digest synthesis (overridden by user_state.model at runtime)
   vision: "openai/gpt-4o"                  # image understanding in scraper (not yet wired)
 

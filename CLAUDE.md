@@ -99,6 +99,18 @@ debugging end-to-end behavior locally.
   (`84838f8`).
 - All OpenRouter calls **must** set explicit `max_tokens` — worst-case
   cost estimation otherwise rejects the request with 402 (`c82fc78`).
+- **Model ids rot.** Every id in `handlers/settings.AVAILABLE_MODELS`,
+  `db.DEFAULT_MODEL`, and `pipeline_config.DEFAULT_DIGEST_MODEL` must be
+  live in OpenRouter's catalog (`GET https://openrouter.ai/api/v1/models`)
+  — a retired id 404s the whole digest run. Retired ids sat in all three
+  for months (incident 2026-08-04: `claude-3.5-haiku`,
+  `claude-3.7-sonnet`). Add every newly offered model to
+  `pricing.PRICE_PER_1M` too, or `/stats` margin quietly uses a made-up
+  rate. `tests/test_model_catalog.py` pins these invariants offline.
+- **Never insert a `user_settings` row without `model`.** Postgres then
+  applies the column server_default, which is frozen at migration time —
+  that is the actual mechanism behind the 2026-08-04 incident, not the
+  Python constant. `db.DEFAULT_MODEL` is the single source of truth.
 - `MemorySaver` resets on container restart — thread-id state is
   intentionally ephemeral for this single-user bot (`d60e2dc`).
 - `RemoveMessage(id=...)` requires `id` to be present; messages added

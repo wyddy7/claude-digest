@@ -60,13 +60,17 @@ _MENU_LABELS = {BTN_DIGEST, BTN_HISTORY, BTN_PROFILE, BTN_SETTINGS, BTN_SUBSCRIP
 def _is_menu_or_command(text: str) -> bool:
     return text.startswith("/") or text.startswith("🎯") or text in _MENU_LABELS
 
-# Available model choices offered to every user.
+# Available model choices offered to every user, ordered best-first.
+# EVERY id here must be live in OpenRouter's catalog — a retired id 404s the
+# whole digest run. Re-check against https://openrouter.ai/api/v1/models before
+# adding one. Prices are USD per 1M tokens (in/out), verified 2026-08-04.
 AVAILABLE_MODELS: dict[str, str] = {
-    "🚀 Claude Sonnet 4.6": "anthropic/claude-sonnet-4.6",
-    "⚡ Claude Haiku 4.5": "anthropic/claude-haiku-4.5",
-    "🧠 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
-    "⚡ Claude 3.5 Haiku": "anthropic/claude-3.5-haiku",
-    "🟢 GPT-4o Mini": "openai/gpt-4o-mini",
+    "🚀 Claude Sonnet 5 · $2/$10": "anthropic/claude-sonnet-5",
+    "🧠 Qwen 3.8 Max · $2/$6": "qwen/qwen3.8-max",
+    "🐉 GLM 5.2 · $0.76/$2.42": "z-ai/glm-5.2",
+    "⚡ Claude Haiku 4.5 · $1/$5": "anthropic/claude-haiku-4.5",
+    "🐋 DeepSeek V4 Pro · $0.44/$0.87": "deepseek/deepseek-v4-pro",
+    "🪶 DeepSeek V4 Flash · $0.09/$0.18": "deepseek/deepseek-v4-flash-0731",
 }
 
 

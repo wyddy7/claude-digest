@@ -45,13 +45,13 @@ def _make_model(role: str = "chat", model_id: str | None = None) -> ChatOpenAI:
     """Build a ChatOpenAI pointed at OpenRouter.
 
     model_id: the per-user model from user_settings (db.load_settings always
-    populates it, default 'anthropic/claude-3.5-haiku'). When given it wins, so
+    populates it with db.DEFAULT_MODEL). When given it wins, so
     each tenant's chat runs on THEIR selected model. Only when it's absent do we
     fall back to the owner yaml models.<role> (legacy) and then a hard default —
     the owner's private yaml no longer silently sets the chat model for everyone.
     """
     if not model_id:
-        model_id = load_personalization().get("models", {}).get(role) or "anthropic/claude-3.5-haiku"
+        model_id = load_personalization().get("models", {}).get(role) or db.DEFAULT_MODEL
     key = os.getenv("OPENROUTER_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_KEY env var is not set")

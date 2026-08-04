@@ -43,7 +43,7 @@ class UserState(Base):
     channels = Column(JSONB, nullable=False, default=list)
     current_focus = Column(Text, nullable=False, default="")
     focus_auto_reset = Column(Boolean, nullable=False, default=False)
-    model = Column(Text, nullable=False, default="anthropic/claude-3.5-haiku")
+    model = Column(Text, nullable=False, default="anthropic/claude-sonnet-5")
     last_digest = Column(Text, nullable=False, default="")
     last_digest_time = Column(Text, nullable=False, default="")
     interaction_history = Column(JSONB, nullable=False, default=list)
@@ -108,7 +108,7 @@ class UserSettings(Base):
     channels = Column(JSONB, nullable=False, server_default=text("'[]'"))
     current_focus = Column(Text, nullable=False, server_default=text("''"))
     focus_auto_reset = Column(Boolean, nullable=False, server_default=text("false"))
-    model = Column(Text, nullable=False, server_default=text("'anthropic/claude-3.5-haiku'"))
+    model = Column(Text, nullable=False, server_default=text("'anthropic/claude-sonnet-5'"))
     limits = Column(JSONB, nullable=False, server_default=text("'{}'"))            # per-user overrides
     personalization = Column(JSONB, nullable=False, server_default=text("'{}'"))   # load_personalization(tenant_id) home
     timezone = Column(Text, nullable=False, server_default=text("'Europe/Moscow'"))

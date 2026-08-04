@@ -21,9 +21,9 @@ READ_MODE_OFF = "off"
 READ_MODE_EXTRACT = "extract"
 READ_MODE_AGENTIC = "agentic"
 
-# Fallback models. The digest default matches the pre-refactor generate_digest
-# fallback so off-mode behavior is identical when user_state.model is unset.
-DEFAULT_DIGEST_MODEL = "anthropic/claude-3.5-haiku"
+# Fallback models. Keep in sync with db.DEFAULT_MODEL — both must name a model
+# OpenRouter currently serves, or an unset user_state.model 404s the pipeline.
+DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
 DEFAULT_CHEAP_MODEL = "deepseek/deepseek-chat"
 
 

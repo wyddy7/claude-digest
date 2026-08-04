@@ -22,10 +22,18 @@ logger = logging.getLogger(__name__)
 # FALLBACK ONLY (see module docstring). USD per 1M tokens: id -> (prompt, completion).
 # Just the models this bot actually defaults to; everything else hits _FALLBACK_RATE.
 PRICE_PER_1M: dict[str, tuple[float, float]] = {
+    # Offered in /settings (see handlers/settings.AVAILABLE_MODELS).
+    "anthropic/claude-sonnet-5": (2.00, 10.00),
+    "qwen/qwen3.8-max": (2.00, 6.00),
+    "z-ai/glm-5.2": (0.76, 2.42),
+    "anthropic/claude-haiku-4.5": (1.00, 5.00),
+    "deepseek/deepseek-v4-pro": (0.435, 0.870),
+    "deepseek/deepseek-v4-flash-0731": (0.09, 0.18),
+    # Pipeline internals + models users may still have stored from before.
+    "deepseek/deepseek-chat": (0.28, 0.88),
+    "anthropic/claude-sonnet-4.6": (3.00, 15.00),
     "anthropic/claude-3.5-haiku": (0.80, 4.00),
     "anthropic/claude-3-haiku": (0.25, 1.25),
-    "anthropic/claude-sonnet-4.6": (3.00, 15.00),
-    "deepseek/deepseek-chat": (0.28, 0.88),
 }
 
 # Used when a model id is not in the table. Deliberately not cheap — an unknown
