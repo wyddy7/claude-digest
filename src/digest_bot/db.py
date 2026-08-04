@@ -983,6 +983,12 @@ async def ensure_owner_user() -> None:
         settings_payload = {
             "user_id": user_id,
             "limits": pro_limits,
+            # Same rule as get_or_create_user: never let Postgres fill this in
+            # from the column server_default, which is frozen at migration time.
+            # This branch runs on a DB with no legacy user_state — i.e. a fresh
+            # project or a restore — which is exactly where the stale default
+            # still lives.
+            "model": DEFAULT_MODEL,
         }
 
     try:

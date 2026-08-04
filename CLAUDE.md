@@ -51,7 +51,7 @@ These are fixed — do not introduce alternatives without an explicit reason:
 Run **before** every push to `master`:
 
 ```bash
-uv run pytest -q                         # offline, ~1 sec, 185 tests, must be green
+uv run pytest -q                         # offline, ~1 sec, 193 tests, must be green
 uv run python test_ai_integration.py     # offline, ~5 sec, must be 100% pass
 ```
 
@@ -73,7 +73,7 @@ debugging end-to-end behavior locally.
 
 1. Docker build (cached layers).
 2. Import check (every module imports without crashing).
-3. `uv run pytest -q` — the full offline suite in `tests/` (185 tests).
+3. `uv run pytest -q` — the full offline suite in `tests/` (193 tests).
 4. Scraper test (live public channel, no credentials).
 5. `uv run python test_ai_integration.py`.
 6. Optionally `test_smoke.py` if secrets are configured.

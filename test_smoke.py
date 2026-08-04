@@ -31,11 +31,12 @@ async def test_scraper():
 
 async def test_ai_digest(posts):
     print("ai.generate_digest...", end=" ")
+    import digest_bot.db as db
     from digest_bot.ai import generate_digest
 
     data = {
         "current_focus": "",
-        "model": "anthropic/claude-3.5-haiku",
+        "model": db.DEFAULT_MODEL,
         "openrouter_key": OPENROUTER_KEY,
         "interaction_history": [],
     }

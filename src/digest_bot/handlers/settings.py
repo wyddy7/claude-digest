@@ -64,9 +64,20 @@ def _is_menu_or_command(text: str) -> bool:
 # EVERY id here must be live in OpenRouter's catalog — a retired id 404s the
 # whole digest run. Re-check against https://openrouter.ai/api/v1/models before
 # adding one. Prices are USD per 1M tokens (in/out), verified 2026-08-04.
+#
+# "Live in the catalog" is NOT enough — the model must also return non-empty
+# content under ai.DIGEST_MAX_TOKENS with ai.DIGEST_REASONING applied. Probe a
+# candidate with a realistic digest-sized request before adding it.
+# `qwen/qwen3.8-max` is live and cheap but NOT offered: it rejects
+# reasoning.enabled=false with 400 "Reasoning is mandatory for this endpoint",
+# and with reasoning on it burned all 8000 tokens and returned content="".
+#
+# Headline catalog prices below are the CHEAPEST provider's. OpenRouter routes
+# by availability, so an actual call can bill several times that (deepseek-v4-pro
+# ranges $0.435→$1.74 in / $0.87→$3.48 out across its 19 endpoints). Treat the
+# labels as a floor, not a quote.
 AVAILABLE_MODELS: dict[str, str] = {
     "🚀 Claude Sonnet 5 · $2/$10": "anthropic/claude-sonnet-5",
-    "🧠 Qwen 3.8 Max · $2/$6": "qwen/qwen3.8-max",
     "🐉 GLM 5.2 · $0.76/$2.42": "z-ai/glm-5.2",
     "⚡ Claude Haiku 4.5 · $1/$5": "anthropic/claude-haiku-4.5",
     "🐋 DeepSeek V4 Pro · $0.44/$0.87": "deepseek/deepseek-v4-pro",

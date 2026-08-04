@@ -30,7 +30,10 @@ PRICE_PER_1M: dict[str, tuple[float, float]] = {
     "deepseek/deepseek-v4-pro": (0.435, 0.870),
     "deepseek/deepseek-v4-flash-0731": (0.09, 0.18),
     # Pipeline internals + models users may still have stored from before.
-    "deepseek/deepseek-chat": (0.28, 0.88),
+    # Re-checked against the live catalog 2026-08-04: was (0.28, 0.88), which
+    # understated output by 17%. This is the ad_filter/triage model, so it prices
+    # every digest's cheap stages.
+    "deepseek/deepseek-chat": (0.2574, 1.0287),
     "anthropic/claude-sonnet-4.6": (3.00, 15.00),
     "anthropic/claude-3.5-haiku": (0.80, 4.00),
     "anthropic/claude-3-haiku": (0.25, 1.25),

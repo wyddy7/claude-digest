@@ -206,6 +206,9 @@ async def test_creates_row_when_absent_no_legacy(monkeypatch):
     settings = state.settings_inserted[0]
     assert settings["user_id"] == _OWNER_UUID
     assert "limits" in settings
+    # Must be written explicitly — omitting it hands the row to the frozen
+    # column server_default, which is how the 2026-08-04 dead-model bug worked.
+    assert settings["model"] == db_module.DEFAULT_MODEL
 
 
 @pytest.mark.asyncio

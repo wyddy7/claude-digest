@@ -16,8 +16,21 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 CHEAP_VISION_MODEL = "openai/gpt-4o-mini"
 AD_FILTER_MODEL = "deepseek/deepseek-chat"
 AD_FILTER_MAX_TOKENS = 250
-DIGEST_MAX_TOKENS = 3500  # reader (extract mode) folds article text into the
+DIGEST_MAX_TOKENS = 8000  # reader (extract mode) folds article text into the
 # prompt, so the digest legitimately produces more output; 1800 truncated it.
+# 3500 truncated it too: Sonnet 4.6 peaked at 3077 completion tokens (14% headroom),
+# and Sonnet 5 blew straight through on its first prod run (2026-08-04 — both
+# attempts hit exactly 3500 and _parse_llm_json died on "Unterminated string").
+# Live re-measure at 8000: Sonnet 5 = 3518, Haiku 4.5 = 2437, finish_reason=stop.
+
+# OpenRouter reasoning control for the digest call. Reasoning tokens are billed as
+# output AND count against max_tokens, and reasoning is emitted BEFORE content — so
+# a reasoning model can spend the entire budget thinking and return content="",
+# which _parse_llm_json reports as "Model returned empty content". Measured
+# 2026-08-04: qwen3.8-max / glm-5.2 / deepseek-v4-pro / deepseek-v4-flash all
+# returned 0 chars at max_tokens=8000 with reasoning on, and all produced valid
+# JSON with it off. No-op for Anthropic models (they emit ~0 reasoning tokens here).
+DIGEST_REASONING = {"enabled": False}
 VISION_FILTER_MAX_TOKENS = 5
 SUMMARY_MAX_TOKENS = 400
 
@@ -399,6 +412,7 @@ async def generate_digest(
                 max_tokens=DIGEST_MAX_TOKENS,
                 # Do NOT pass response_format — Claude models via OpenRouter return empty
                 # content when this OpenAI-specific parameter is set. JSON is enforced via prompt.
+                extra_body={"reasoning": DIGEST_REASONING},
             )
             record_usage(usage_log, "digest", model, resp)
             raw = resp.choices[0].message.content
