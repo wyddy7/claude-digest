@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import trafilatura
 from bs4 import BeautifulSoup
 
-from digest_bot.ai import _parse_llm_json, record_usage
+from digest_bot.ai import _parse_llm_json, record_usage, strip_feed_engagement
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ async def triage_links(posts: list[dict], *, client, model: str, usage_log=None)
 
     lines = []
     for pid, p in indexed:
-        title = (p.get("text") or "")[:200].replace("\n", " ")
+        title = strip_feed_engagement(p.get("text") or "")[:200].replace("\n", " ")
         link_lines = "\n".join(f"    [{j}] {u}" for j, u in enumerate(p["external_urls"]))
         lines.append(f"POST {pid} (канал {p.get('channel', '?')}): {title}\nLINKS:\n{link_lines}")
 

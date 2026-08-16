@@ -54,6 +54,7 @@ prompt:
     - example is optional and only for non-trivial concepts.
     - personal must restate source-backed insights in the user's context, not invent new facts; do not weld unrelated facts into one fake frame, and do not force an actionless fact into personal.
     - tail is a list of one-liners ("gist — channel") for real-but-low-signal items that did not earn a block; never put pure noise here; AT MOST 5 lines — keep only the most notable, drop the rest; empty list when everything notable is already in sources.
+    - "never surface a post's popularity metrics anywhere (bullets, example, tail, personal) — Hacker News score/points, upvotes, comment counts, 'top of HN', 'went viral', 'N+ score in M hours', vote velocity, view/reaction counts. That measures the discussion, not the news; for link-aggregator feeds the score is usually just the bot's publication threshold. EXCEPTION — benchmark numbers and metrics of the models/tools themselves are substantive facts, keep those."
     - post_date must come from source metadata in DD.MM.YYYY format.
     - url must come from the provided source link.
   source_selection_rules:

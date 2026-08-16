@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from html import escape
 from typing import Optional
 
@@ -242,6 +243,44 @@ def _format_article_blocks(read_content: list[dict]) -> str:
     return "\n".join(blocks)
 
 
+# Aggregator feeds append their own publication threshold to the post title —
+# hacker_news_feed posts read "Title (🔥 Score: 160+ in 2 hours)". That number is
+# NOT a fact about the news: it is the value at which the feed bot decided to
+# publish. Measured over 162 prod digests (2026-08-16): 63 score values leaked
+# into bullets, min 150, median 153, 21 of them exactly 150/151 — a near-constant
+# carrying zero information, yet the model copied it because "bullets — facts
+# strictly from the source post" told it to. Strip it before the text ever
+# reaches the prompt; the model cannot quote what it never saw. The title itself
+# is untouched. Prompt-side rules (hard_rules/ad_filter_rules in the
+# personalization yamls) cover the model's own editorializing ("#1 on HN",
+# "went viral") — this regex only kills the source-side suffix.
+# A bracketed benchmark score — "(1280 очков)", "(1385 points)", "LMArena
+# (score: 1280)" — must never be touched, so the lookahead demands a marker only a
+# feed threshold carries: a "+" or a rate clause ("in 2 hours"). Only English
+# metric words participate: Russian «очки/баллы» in a real post are almost always
+# an arena/benchmark result.
+_FEED_ENGAGEMENT_RE = re.compile(
+    r"\s*[\(\[]\s*[^\w\s()\[\]]{0,4}\s*"          # opener + optional 🔥-style marker
+    r"(?=[^)\]]*(?:\+|\b(?:in|за)\s))"            # threshold "+" or a rate clause
+    r"(?:"
+    r"(?:score|points?|upvotes?)\s*:?\s*\d+\+?"   # "Score: 150+"
+    r"|\d+\+?\s*(?:score|points?|upvotes?)"       # "163+ points"
+    r")"
+    r"(?:\s*(?:in|за)\s+[^)\]]{0,40})?"           # optional "in 2 hours" tail
+    r"\s*[\)\]]",
+    re.IGNORECASE,
+)
+
+
+def strip_feed_engagement(text: str) -> str:
+    """Remove aggregator publication-threshold suffixes ("(Score: 150+ in 2 hours)")
+    from a post's text. Pure, no network, safe on any source: it only matches a
+    bracketed metric, never a benchmark number in prose."""
+    if not text:
+        return text
+    return _FEED_ENGAGEMENT_RE.sub("", text)
+
+
 def _format_posts(posts: list[dict]) -> str:
     parts = []
     for p in posts:
@@ -260,7 +299,7 @@ def _format_posts(posts: list[dict]) -> str:
             f"{prefix}: {p['channel']}\n"
             f"ДАТА: {date_str}\n"
             f"ССЫЛКА: {link}\n"
-            f"ТЕКСТ:\n{p['text'][:1600]}"
+            f"ТЕКСТ:\n{strip_feed_engagement(p['text'])[:1600]}"
         )
         articles = _format_article_blocks(p.get("read_content"))
         if articles:
