@@ -400,12 +400,12 @@ async def filter_ads(posts: list[dict], *, client, model: str, batch_size: int =
                 if not labels.get(i, False):
                     kept.append(post)
                 else:
-                    logger.info(f"Ad-filter dropped: [{post['channel']}] {post['text'][:60]!r}")
+                    logger.info("Ad-filter dropped: [%s] %r", post["channel"], post["text"][:60])
         except Exception as e:
-            logger.warning(f"Ad-filter batch failed, keeping all: {e}")
+            logger.warning("Ad-filter batch failed, keeping all: %s: %s", type(e).__name__, e)
             kept.extend(batch)
 
-    logger.info(f"Ad-filter: {len(posts)} posts → {len(kept)} kept")
+    logger.info("Ad-filter: %s posts → %s kept", len(posts), len(kept))
     return kept
 
 
@@ -455,7 +455,7 @@ async def generate_digest(
             )
             record_usage(usage_log, "digest", model, resp)
             raw = resp.choices[0].message.content
-            logger.debug(f"generate_digest raw response (attempt {attempt+1}): {str(raw)[:200]!r}")
+            logger.debug("generate_digest raw response (attempt %s): %r", attempt + 1, str(raw)[:200])
             data = _parse_llm_json(raw)
             result = DigestResult.model_validate(data)
             stats = _to_html_stats(
@@ -465,9 +465,9 @@ async def generate_digest(
             )
             return _to_html_digest(result), _to_html_personal(result), stats
         except Exception as e:
-            logger.warning(f"generate_digest attempt {attempt+1} failed: {e}")
+            logger.warning("generate_digest attempt %s failed: %s: %s", attempt + 1, type(e).__name__, e)
             if attempt == 1:
-                logger.error(f"generate_digest: all attempts failed", exc_info=True)
+                logger.exception("generate_digest: all attempts failed")
                 return f"Ошибка генерации дайджеста: {e}", None, ""
 
 
@@ -509,11 +509,11 @@ async def filter_images(images: list[bytes], digest_text: str, api_key: str) -> 
                 temperature=0.0,
             )
             answer = resp.choices[0].message.content.strip().upper()
-            logger.info(f"Image filter verdict: {answer}")
+            logger.info("Image filter verdict: %s", answer)
             if "YES" in answer:
                 approved.append(img_bytes)
         except Exception as e:
-            logger.warning(f"image filter error: {e}")
+            logger.warning("image filter error: %s: %s", type(e).__name__, e)
             continue
 
     return approved
@@ -550,7 +550,7 @@ async def summarize_chat_history(messages: list[dict], api_key: str) -> str:
         text = (resp.choices[0].message.content or "").strip()
         return text
     except Exception as e:
-        logger.warning(f"summarize_chat_history failed: {e}")
+        logger.warning("summarize_chat_history failed: %s: %s", type(e).__name__, e)
         return ""
 
 

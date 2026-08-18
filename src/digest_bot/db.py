@@ -158,7 +158,7 @@ async def init_supabase(url: str, key: str) -> None:
         lambda: _client.table("user_state").select("id").eq("id", 1).execute(),
         what="init_supabase",
     )
-    logger.info(f"DB connection verified (supabase-py HTTP, rows={len(resp.data)})")
+    logger.info("DB connection verified (supabase-py HTTP, rows=%s)", len(resp.data))
 
 
 async def close_pool() -> None:
@@ -174,7 +174,7 @@ async def close_pool() -> None:
                     if hasattr(res, "__await__"):
                         await res
                 except Exception as e:
-                    logger.debug(f"close_pool: {closer} failed (non-fatal): {e}")
+                    logger.debug("close_pool: %s failed (non-fatal): %s: %s", closer, type(e).__name__, e)
                 break
         _client = None
     logger.info("DB connections closed")
@@ -323,7 +323,7 @@ async def mark_urls_fetched(urls: list[str]) -> None:
         for u in dict.fromkeys(urls)  # dedupe preserving order
     ]
     await _get_client().table("link_cache").upsert(rows).execute()
-    logger.debug(f"db.mark_urls_fetched: {len(rows)} urls")
+    logger.debug("db.mark_urls_fetched: %s urls", len(rows))
 
 
 # ─── multi-tenant: identity ───────────────────────────────────────────────────
@@ -886,7 +886,7 @@ async def scrape_cache_put(channel: str, posts: list[dict]) -> None:
             "fetched_at": now_iso,
         })
     await _get_client().table("scrape_cache").upsert(rows).execute()
-    logger.debug(f"db.scrape_cache_put: {len(rows)} posts for {channel}")
+    logger.debug("db.scrape_cache_put: %s posts for %s", len(rows), channel)
 
 
 # ─── multi-tenant: scheduler fan-out + personalization ────────────────────────

@@ -125,7 +125,7 @@ def _group_into_threads(raw: list[dict]) -> list[dict]:
                     merged_urls.append(u)
         merged["external_urls"] = merged_urls
         result.append(merged)
-        logger.debug(f"[{thread[0]['channel']}] merged {len(thread)} msgs into thread")
+        logger.debug("[%s] merged %s msgs into thread", thread[0]["channel"], len(thread))
 
     return result
 
@@ -136,7 +136,7 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=HEADERS) as client:
             resp = await client.get(url)
             if resp.status_code != 200:
-                logger.warning(f"[{channel}] HTTP {resp.status_code}")
+                logger.warning("[%s] HTTP %s", channel, resp.status_code)
                 return []
 
             # Detect redirect away from /s/ — group chats and private channels
@@ -145,9 +145,11 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
             final_path = resp.url.path.rstrip("/")
             if final_path != f"/s/{channel}":
                 logger.warning(
-                    f"[{channel}] redirected to {final_url} — "
+                    "[%s] redirected to %s — "
                     "channel may not support public scraping (group chat or private). "
-                    "Consider removing it from the channel list."
+                    "Consider removing it from the channel list.",
+                    channel,
+                    final_url,
                 )
                 return []
 
@@ -197,7 +199,7 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                         if img_resp.status_code == 200 and "image" in ct and len(img_resp.content) > 500:
                             image_bytes.append(img_resp.content)
                     except Exception as e:
-                        logger.warning(f"[{channel}] image fetch error: {e}")
+                        logger.warning("[%s] image fetch error: %s: %s", channel, type(e).__name__, e)
 
                 post = {
                     "channel": channel,
@@ -211,16 +213,16 @@ async def scrape_channel(channel: str, hours_back: int = 26) -> list[dict]:
                 raw.append(post)
                 date_label = post_time.strftime("%d.%m %H:%M")
                 snippet = text[:90].replace("\n", " ")
-                logger.debug(f"[{channel}] +post {date_label} len={len(text)}: {snippet!r}")
+                logger.debug("[%s] +post %s len=%s: %r", channel, date_label, len(text), snippet)
 
     except Exception as e:
-        logger.error(f"[{channel}] scrape error: {e}")
+        logger.exception("[%s] scrape error", channel)
         return []
 
     posts = _group_into_threads(raw)
     imgs = sum(len(p.get("image_bytes") or []) for p in posts)
     threads = sum(1 for p in posts if p.get("is_thread"))
-    logger.info(f"[{channel}] {len(raw)} msgs → {len(posts)} posts ({threads} threads, {imgs} images)")
+    logger.info("[%s] %s msgs → %s posts (%s threads, %s images)", channel, len(raw), len(posts), threads, imgs)
     return posts
 
 

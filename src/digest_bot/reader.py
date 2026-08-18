@@ -77,7 +77,7 @@ async def triage_links(posts: list[dict], *, client, model: str, usage_log=None)
         record_usage(usage_log, "triage", model, resp)
         data = _parse_llm_json(resp.choices[0].message.content)
     except Exception as e:
-        logger.warning(f"[reader] triage failed, opening nothing: {e}")
+        logger.warning("[reader] triage failed, opening nothing: %s: %s", type(e).__name__, e)
         return {}
 
     by_pid = {pid: p["external_urls"] for pid, p in indexed}
@@ -143,7 +143,7 @@ def extract_content(html: str) -> str:
     try:
         text = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
     except Exception as e:
-        logger.warning(f"[reader] extract failed: {e}")
+        logger.warning("[reader] extract failed: %s: %s", type(e).__name__, e)
         text = ""
     return text.strip()[:EXTRACT_CHAR_BUDGET]
 
@@ -179,7 +179,7 @@ async def _apply_dedup(capped: dict, *, db_module, window_days: int, stats: dict
     try:
         seen = await db_module.get_seen_urls(list(url_to_hash.values()), window_days)
     except Exception as e:
-        logger.warning(f"[reader] dedup lookup failed, proceeding without it: {e}")
+        logger.warning("[reader] dedup lookup failed, proceeding without it: %s: %s", type(e).__name__, e)
         return capped
     fresh: dict[str, list[str]] = {}
     for pid, urls in capped.items():
@@ -234,7 +234,7 @@ async def read_posts(posts: list[dict], *, config, client, fetcher, db_module=No
                     fetched_ok.append(url)
                 read_content.append({"url": url, "final_url": final_url, "text": text, "ok": ok})
             except Exception as e:
-                logger.warning(f"[reader] fetch/extract failed for {url}: {e}")
+                logger.warning("[reader] fetch/extract failed for %s: %s: %s", url, type(e).__name__, e)
                 read_content.append({"url": url, "final_url": url, "text": "", "ok": False})
         post["read_content"] = read_content
 
@@ -242,7 +242,7 @@ async def read_posts(posts: list[dict], *, config, client, fetcher, db_module=No
         try:
             await db_module.mark_urls_fetched(fetched_ok)
         except Exception as e:
-            logger.warning(f"[reader] mark_urls_fetched failed (non-fatal): {e}")
+            logger.warning("[reader] mark_urls_fetched failed (non-fatal): %s: %s", type(e).__name__, e)
 
-    logger.info(f"[reader] {ENGINE}: {stats}")
+    logger.info("[reader] %s: %s", ENGINE, stats)
     return stats

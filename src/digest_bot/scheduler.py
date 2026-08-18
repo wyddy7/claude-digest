@@ -50,7 +50,7 @@ async def run_digest_fanout():
         logger.info("Fan-out: no active users — nothing to deliver")
         return
 
-    logger.info(f"Fan-out: {len(users)} active user(s)")
+    logger.info("Fan-out: %s active user(s)", len(users))
     async with Bot(BOT_TOKEN) as bot:
         for user in users:
             tg_user_id = user["tg_user_id"]
@@ -80,7 +80,7 @@ async def run_digest_fanout():
                         continue
 
                 posts_count = await _deliver_user_digest(bot, user)
-                logger.info(f"Fan-out: delivered to {tg_user_id} ({posts_count} posts)")
+                logger.info("Fan-out: delivered to %s (%s posts)", tg_user_id, posts_count)
             except Exception as e:
                 # %r + exc_info: empty-message exceptions (httpx.ReadTimeout has
                 # str()=='') logged a bare ': ' that hid the cause (2026-06-26).
@@ -129,7 +129,7 @@ async def _run():
 
     try:
         scheduler.start()
-        logger.info(f"Scheduler started — digest {DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d} MSK, checkin {CHECKIN_HOUR:02d}:{CHECKIN_MINUTE:02d} MSK")
+        logger.info("Scheduler started — digest %02d:%02d MSK, checkin %02d:%02d MSK", DIGEST_HOUR, DIGEST_MINUTE, CHECKIN_HOUR, CHECKIN_MINUTE)
         await stop_event.wait()
     finally:
         scheduler.shutdown()

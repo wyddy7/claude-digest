@@ -43,3 +43,11 @@ packages = ["src/digest_bot"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff.lint]
+# Logging gate — exactly these three rules, per auto-docs/for-development/logging-errors.md.
+# Do NOT widen to the full G/TRY families: they are mostly style, this is a defect gate.
+# G004  = f-string in a logging call (loses lazy formatting, invites {e} interpolation)
+# TRY400 = logger.error inside except where logger.exception belongs
+# TRY401 = exception redundantly interpolated into logger.exception message
+select = ["G004", "TRY400", "TRY401"]

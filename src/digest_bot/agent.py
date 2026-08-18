@@ -256,7 +256,7 @@ async def _compact_if_needed(agent, config) -> int | None:
 
     cut_idx = _find_safe_cut(msgs)
     if cut_idx <= 0:
-        logger.debug(f"[compact] no safe cut for {len(msgs)} msgs, skipping")
+        logger.debug("[compact] no safe cut for %s msgs, skipping", len(msgs))
         return None
 
     head = msgs[:cut_idx]
@@ -281,7 +281,7 @@ async def _compact_if_needed(agent, config) -> int | None:
 
     summary_msg = HumanMessage(content=f"[Сжатая история беседы]: {summary_text}")
     await agent.aupdate_state(config, {"messages": remove_ops + [summary_msg]})
-    logger.info(f"[compact] {len(msgs)} → {len(msgs) - len(remove_ops) + 1} msgs (summarized {len(remove_ops)})")
+    logger.info("[compact] %s → %s msgs (summarized %s)", len(msgs), len(msgs) - len(remove_ops) + 1, len(remove_ops))
     return len(remove_ops)
 
 
@@ -367,7 +367,7 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     else:
         data = await db_module.load()
         channels = data.get("channels", [])
-    logger.info(f"[digest] channels ({len(channels)}): {channels}")
+    logger.info("[digest] channels (%s): %s", len(channels), channels)
 
     # Step 2 — scrape in parallel
     await _status(_DIGEST_STATUS["scrape"])
@@ -378,10 +378,10 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
     posts = []
     for ch, result in zip(channels, results):
         if isinstance(result, Exception):
-            logger.warning(f"[digest] scrape failed: {ch}: {result}")
+            logger.warning("[digest] scrape failed: %s: %s: %s", ch, type(result).__name__, result)
         else:
             posts.extend(result)
-    logger.info(f"[digest] scraped {len(posts)} posts from {len(channels)} channels")
+    logger.info("[digest] scraped %s posts from %s channels", len(posts), len(channels))
 
     # Step 2b — reader layer (Grade A): deep-read content behind post links.
     reader_stats = None
@@ -391,21 +391,21 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
             posts, config=config, client=llm_client, fetcher=fetcher,
             db_module=db_module, usage_log=usage_log,
         )
-        logger.info(f"[digest] reader: {reader_stats}")
+        logger.info("[digest] reader: %s", reader_stats)
 
     # Step 3 — filter ads
     await _status(_DIGEST_STATUS["filter"])
     filtered = await filter_ads(
         posts, client=llm_client, model=config.models["ad_filter"].model_id, usage_log=usage_log
     )
-    logger.info(f"[digest] after ad-filter: {len(filtered)} posts")
+    logger.info("[digest] after ad-filter: %s posts", len(filtered))
 
     # Step 4 — generate digest
     await _status(_DIGEST_STATUS["generate"])
     user_data = data.copy()
     recent = config.recent_digests if multitenant else await db_module.load_history(limit=3)
     digest_model = config.models["digest"].model_id
-    logger.info(f"[digest] generating | posts={len(filtered)} | model={digest_model}")
+    logger.info("[digest] generating | posts=%s | model=%s", len(filtered), digest_model)
     digest_html, personal_html, stats_html = await generate_digest(
         filtered, user_data, client=llm_client, model=digest_model,
         recent_digests=recent, usage_log=usage_log,
@@ -414,7 +414,7 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
         # owner's yaml.
         personalization=config.personalization or None,
     )
-    logger.info(f"[digest] generated  | digest_len={len(digest_html)} | personal={'yes' if personal_html else 'no'}")
+    logger.info("[digest] generated  | digest_len=%s | personal=%s", len(digest_html), "yes" if personal_html else "no")
 
     # Step 5 — save to history. Legacy single-tenant writes the global history
     # row here; multi-tenant callers record per-user history themselves
@@ -424,8 +424,8 @@ async def run_digest_pipeline(config, *, db_module=db, llm_client=None, fetcher=
         await db_module.append_to_history(digest_html, len(filtered))
 
     cost_summary = _build_cost_summary(config, usage_log, reader_stats)
-    logger.info(f"[digest] cost_summary: {cost_summary}")
-    logger.info(f"[digest] done | posts_count={len(filtered)}")
+    logger.info("[digest] cost_summary: %s", cost_summary)
+    logger.info("[digest] done | posts_count=%s", len(filtered))
 
     return {
         "digest_html": digest_html,
@@ -476,11 +476,11 @@ async def run_chat_turn(
     try:
         removed = await _compact_if_needed(agent, config)
         if removed:
-            logger.info(f"[chat_agent] compacted {removed} prior messages")
+            logger.info("[chat_agent] compacted %s prior messages", removed)
     except Exception as e:
-        logger.warning(f"[chat_agent] compact failed (non-fatal): {e}")
+        logger.warning("[chat_agent] compact failed (non-fatal): %s: %s", type(e).__name__, e)
 
-    logger.info(f"[chat_agent] turn start | user={user_id} | msg={message[:80]!r}")
+    logger.info("[chat_agent] turn start | user=%s | msg=%r", user_id, message[:80])
     final_text = "Не смог ответить."
     model_calls = 0
     try:
@@ -493,23 +493,23 @@ async def run_chat_turn(
             if kind == "on_tool_start":
                 tool_name = event.get("name", "")
                 tool_input = event.get("data", {}).get("input", "")
-                logger.info(f"[chat_agent] tool_start: {tool_name} | input={str(tool_input)[:120]!r}")
+                logger.info("[chat_agent] tool_start: %s | input=%r", tool_name, str(tool_input)[:120])
             elif kind == "on_tool_end":
                 tool_name = event.get("name", "")
                 tool_output = event.get("data", {}).get("output", "")
-                logger.info(f"[chat_agent] tool_end:   {tool_name} | output={str(tool_output)[:120]!r}")
+                logger.info("[chat_agent] tool_end:   %s | output=%r", tool_name, str(tool_output)[:120])
             elif kind == "on_chat_model_start":
                 model_calls += 1
                 msgs = event.get("data", {}).get("input", {}).get("messages", [])
-                logger.info(f"[chat_agent] model_call #{model_calls} | ctx_messages={len(msgs)}")
+                logger.info("[chat_agent] model_call #%s | ctx_messages=%s", model_calls, len(msgs))
             elif kind == "on_chat_model_end":
                 output = event.get("data", {}).get("output")
                 if output and hasattr(output, "content") and output.content:
                     final_text = output.content
-                logger.info(f"[chat_agent] model_done  #{model_calls} | reply={final_text[:100]!r}")
+                logger.info("[chat_agent] model_done  #%s | reply=%r", model_calls, final_text[:100])
     except Exception as e:
-        logger.error(f"[chat_agent] error: {e}", exc_info=True)
+        logger.exception("[chat_agent] error")
         return f"Ошибка агента: {e}"
 
-    logger.info(f"[chat_agent] turn end   | model_calls={model_calls} | reply_len={len(final_text)}")
+    logger.info("[chat_agent] turn end   | model_calls=%s | reply_len=%s", model_calls, len(final_text))
     return final_text
